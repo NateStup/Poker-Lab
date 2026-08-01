@@ -1,0 +1,32 @@
+extends layout
+
+block content
+  .calculator-shell
+    .hero-card
+      h1= title
+      p Enter two hole cards for Player A and Player B. Use card format like As Ks or Qh Qd.
+      p.small Card format: ranks 2-9, T, J, Q, K, A and suits s, h, d, c.
+
+      form#poker-form.card-form
+        .field-row
+          .field-group
+            label(for='p1') Player A hole cards
+            input#p1(type='text', name='p1', placeholder='As Ks')
+          .field-group
+            label(for='p2') Player B hole cards
+            input#p2(type='text', name='p2', placeholder='Qh Qd')
+        .field-row
+          .field-group
+            label(for='flop') Flop (optional)
+            input#flop(type='text', name='flop', placeholder='Kd Qh 2c')
+          .field-group
+            label(for='turn') Turn (optional)
+            input#turn(type='text', name='turn', placeholder='7s')
+        .field-group
+          label(for='iterations') Simulations
+          input#iterations(type='number', name='iterations', value='2000', min='100', step='100')
+        button(type='submit') Calculate Equity
+
+      pre#results.result-box
+
+  script(type='module', src='/javascripts/poker/app.js?v=20260801')

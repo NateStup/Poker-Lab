@@ -2,6 +2,13 @@ doctype html
 html
   head
     title= title
-    link(rel='stylesheet', href='/stylesheets/style.css')
+    link(rel='stylesheet', href='/stylesheets/style.css?v=20260801')
   body
-    block content
+    header.site-header
+      nav
+        ul
+          li: a(href='/') Poker Equity Calculator
+    main.site-content
+      block content
+    footer.site-footer
+      p © #{new Date().getFullYear()} My First App
