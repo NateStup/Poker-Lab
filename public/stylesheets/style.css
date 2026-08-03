@@ -138,6 +138,146 @@ button:hover {
   opacity: 0.95;
 }
 
+.picker-target {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  width: 100%;
+  min-height: 72px;
+  text-align: left;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #f8fafc;
+}
+
+.picker-target.is-active {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35);
+}
+
+.preview-text {
+  font-size: 0.95rem;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+.preview-placeholder {
+  color: #94a3b8;
+}
+
+.card-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.card-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  padding: 0.12rem 0.24rem;
+  border-radius: 0.45rem;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  min-width: 2.05rem;
+  min-height: 1.2rem;
+}
+
+.card-chip-rank,
+.card-chip-suit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card-chip-suit {
+  font-size: 0.95em;
+}
+
+.card-chip.suit-red {
+  color: #dc2626;
+}
+
+.card-chip.suit-black {
+  color: #111827;
+}
+
+.card-picker-panel {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+.card-picker-panel h3 {
+  margin: 0 0 0.25rem;
+}
+
+.card-picker-panel p {
+  margin: 0 0 0.9rem;
+  color: #cbd5e1;
+}
+
+.card-picker {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.picker-row {
+  display: grid;
+  grid-template-columns: 36px repeat(13, minmax(0, 1fr));
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.picker-row-label {
+  font-size: 1.15rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.card-option {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 0.2rem;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 41, 59, 0.85);
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.card-option .card-chip {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  border-radius: 0.6rem;
+  padding: 0.35rem 0.2rem;
+}
+
+.card-option.is-selected {
+  background: rgba(71, 85, 105, 0.45);
+  border-color: rgba(148, 163, 184, 0.4);
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.card-option.is-used {
+  background: rgba(51, 65, 85, 0.55);
+  border-color: rgba(100, 116, 139, 0.4);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .result-box {
   background: transparent;
   border: none;
@@ -216,5 +356,15 @@ button:hover {
 
   .stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .picker-row {
+    grid-template-columns: 28px repeat(13, minmax(0, 1fr));
+    gap: 0.3rem;
+  }
+
+  .card-option {
+    padding: 0.55rem 0.1rem;
+    font-size: 0.95rem;
   }
 }
