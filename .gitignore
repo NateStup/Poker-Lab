@@ -1,3 +1,20 @@
-/.vscode
-/bin
-/node_modules
+node_modules/
+
+# Editor / OS
+.vscode/*
+!.vscode/launch.json
+.DS_Store
+Thumbs.db
+
+# Runtime data store: the directory is tracked, its contents are not.
+data/*
+!data/.gitkeep
+*.tmp
+*.corrupt
+
+# Logs and env
+*.log
+npm-debug.log*
+.env
+.env.local
+coverage/

@@ -1,16 +1,30 @@
 {
-  "name": "myexpressapp",
-  "version": "0.0.0",
+  "name": "poker-lab",
+  "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "start": "node ./bin/www"
+  "type": "module",
+  "description": "Client/server poker toolkit: equity calculator, simulator, and session tracker built on Node, Express, and React.",
+  "main": "src/server/server.js",
+  "engines": {
+    "node": ">=20.11.0"
   },
+  "scripts": {
+    "start": "node src/server/server.js",
+    "dev": "node --watch src/server/server.js",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "test:coverage": "node --test --experimental-test-coverage"
+  },
+  "keywords": [
+    "poker",
+    "equity",
+    "monte-carlo",
+    "express",
+    "react"
+  ],
   "dependencies": {
-    "cookie-parser": "~1.4.4",
-    "debug": "~2.6.9",
-    "express": "~4.16.1",
-    "http-errors": "~1.6.3",
-    "morgan": "~1.9.1",
-    "pug": "2.0.0-beta11"
+    "cookie-parser": "~1.4.6",
+    "express": "~4.19.2",
+    "morgan": "~1.10.0"
   }
 }
