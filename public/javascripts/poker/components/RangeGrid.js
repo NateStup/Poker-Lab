@@ -7,9 +7,14 @@
  * held down is set to match. No `pointercapture` is taken, so the browser
  * keeps delivering `pointerenter` to whichever sibling button the cursor
  * actually moves over -- that's what makes the drag work across cells at all.
+ *
+ * Unselected cells carry a baseline tint from `HAND_TIER` (strong/mid/weak,
+ * derived from the Chen Formula) rather than being flat and undifferentiated
+ * -- the heat-map-at-rest-plus-solid-fill-when-selected look every classic
+ * range chart uses.
  */
 
-import { RANGE_GRID } from '/shared/poker/ranges.js';
+import { HAND_TIER, RANGE_GRID } from '/shared/poker/ranges.js';
 
 const e = React.createElement;
 
@@ -66,6 +71,7 @@ export function RangeGrid({ selected, onChange, role = 'hero', disabledHands }) 
         className: [
           'range-cell',
           `type-${cell.type}`,
+          `tier-${HAND_TIER[cell.hand]}`,
           isSelected ? 'is-selected' : '',
           isSelected && role === 'villain' ? 'role-villain' : ''
         ].filter(Boolean).join(' '),

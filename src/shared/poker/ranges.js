@@ -174,3 +174,108 @@ export function rangeComboCount(handCodes) {
   for (const hand of unique) total += comboCount(hand);
   return total;
 }
+
+/**
+ * Points for the higher-ranked card alone, before pair/suited/gap adjustments.
+ * A, K, Q, J, T score 10/8/7/6/5; everything below scores half its rank value
+ * (9 -> 4.5, ..., 2 -> 1). Standard first step of the Chen Formula.
+ * @param {string} rank
+ * @returns {number}
+ */
+function highCardPoints(rank) {
+  const table = { A: 10, K: 8, Q: 7, J: 6, T: 5 };
+  return table[rank] ?? RANK_VALUES[rank] / 2;
+}
+
+/**
+ * The Chen Formula: a classic, deterministic starting-hand strength score.
+ * No simulation involved -- it's a hand-scoring heuristic poker players have
+ * used by hand for decades -- which is exactly what makes it a good fit for
+ * ranking all 169 hands once, cheaply, for a "top X%" range slider and for
+ * baseline heat-map coloring on the range grid.
+ *
+ * Reference values this reproduces: AA=20, KK=16, QQ=14, AKs=12, JJ=12,
+ * AKo=10, 22-55=5 (the formula's floor for any pair).
+ *
+ * @param {string} hand a canonical hand code
+ * @returns {number}
+ * @throws {TypeError} if `hand` is not a canonical hand code
+ */
+export function chenScore(hand) {
+  const parsed = parseHandCode(hand);
+  if (!parsed) {
+    throw new TypeError(`Not a canonical hand code: ${JSON.stringify(hand)}`);
+  }
+  const { rankHigh, rankLow, type } = parsed;
+
+  if (type === 'pair') {
+    return Math.max(highCardPoints(rankHigh) * 2, 5);
+  }
+
+  let score = highCardPoints(rankHigh);
+  if (type === 'suited') score += 2;
+
+  const gap = RANK_VALUES[rankHigh] - RANK_VALUES[rankLow] - 1;
+  if (gap === 1) score -= 1;
+  else if (gap === 2) score -= 2;
+  else if (gap === 3) score -= 4;
+  else if (gap >= 4) score -= 5;
+
+  // Connectors and one-gappers below a queen can make a straight from either
+  // side, which the gap penalty alone underweights.
+  if (gap <= 1 && RANK_VALUES[rankHigh] < RANK_VALUES.Q) score += 1;
+
+  return score;
+}
+
+/**
+ * Every hand code ordered strongest to weakest by {@link chenScore}. This is
+ * what a "top X%" range slider walks down, and what the range grid's baseline
+ * tier coloring is derived from.
+ * @type {ReadonlyArray<string>}
+ */
+export const HAND_STRENGTH_ORDER = Object.freeze(
+  [...ALL_HANDS].sort((a, b) => chenScore(b) - chenScore(a) || a.localeCompare(b))
+);
+
+/** Tier names, strongest to weakest, used for the range grid's baseline coloring. */
+const TIERS = Object.freeze(['strong', 'mid', 'weak']);
+
+/**
+ * Each hand code's strength tier, precomputed once since {@link chenScore}
+ * never changes at runtime. Cheap O(1) lookup for rendering the grid.
+ * @type {Readonly<Record<string, 'strong'|'mid'|'weak'>>}
+ */
+export const HAND_TIER = Object.freeze(
+  Object.fromEntries(
+    HAND_STRENGTH_ORDER.map((hand, index) => [
+      hand,
+      TIERS[Math.floor((index / HAND_STRENGTH_ORDER.length) * TIERS.length)]
+    ])
+  )
+);
+
+/**
+ * The top `percent`% of hands by combo-weighted strength, e.g.
+ * `selectTopPercent(15)` returns the classes making up the strongest ~15% of
+ * the 1326 starting combos. Whole hand classes are added greedily off
+ * {@link HAND_STRENGTH_ORDER} until the target combo count is reached, so the
+ * result is always a set of complete grid cells, never a partial one --
+ * matching how a range-percentage slider is expected to behave.
+ *
+ * @param {number} percent 0-100
+ * @returns {string[]} hand codes
+ */
+export function selectTopPercent(percent) {
+  const clamped = Math.min(100, Math.max(0, Number(percent) || 0));
+  const targetCombos = Math.round((clamped / 100) * TOTAL_COMBOS);
+
+  const selected = [];
+  let combos = 0;
+  for (const hand of HAND_STRENGTH_ORDER) {
+    if (combos >= targetCombos) break;
+    selected.push(hand);
+    combos += comboCount(hand);
+  }
+  return selected;
+}

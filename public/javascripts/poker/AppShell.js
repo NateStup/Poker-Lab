@@ -8,7 +8,7 @@
  */
 
 import { Nav } from './components/Nav.js';
-import { EquityCalculatorPage } from './pages/EquityCalculatorPage.js';
+import { OddsCalculatorPage } from './pages/OddsCalculatorPage.js';
 import { RangeExplorerPage } from './pages/RangeExplorerPage.js';
 import { useRoute } from './router.js';
 
@@ -16,7 +16,7 @@ const e = React.createElement;
 
 /** @param {string} path @returns {string} */
 function titleFor(path) {
-  return path === '/ranges' ? 'Poker Lab · Range Explorer' : 'Poker Lab · Equity Calculator';
+  return path === '/ranges' ? 'Poker Lab · Range Explorer' : 'Poker Lab · Odds Calculator';
 }
 
 export function AppShell() {
@@ -37,7 +37,7 @@ export function AppShell() {
       e(
         'div',
         { className: `page-shell ${isRangeExplorer ? 'is-wide' : ''}` },
-        isRangeExplorer ? e(RangeExplorerPage) : e(EquityCalculatorPage)
+        isRangeExplorer ? e(RangeExplorerPage) : e(OddsCalculatorPage)
       )
     ),
     e(

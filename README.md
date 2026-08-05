@@ -1,7 +1,7 @@
 # Poker Lab
 
 A client/server poker toolkit built on Node, Express, and React — a Texas
-Hold'em equity calculator with a persistent calculation history, a range
+Hold'em odds calculator with a persistent calculation history, a range
 explorer for range-vs-hand and range-vs-range equity, and the foundation for a
 hand simulator and session tracker.
 
@@ -28,7 +28,7 @@ native ES modules.
 
 ## What it does
 
-**Equity Calculator.** Pick hole cards for two to six players, optionally set
+**Odds Calculator.** Pick hole cards for two to six players, optionally set
 a flop, turn, or river, and get each player's equity.
 
 The engine chooses its own strategy and tells you which it used:
@@ -48,13 +48,18 @@ than merely recorded.
 Every calculation is written to a JSON-backed store and shown in a history panel
 that can reload a past spot back into the form.
 
-**Range Explorer.** Paint a hero range on the standard 13x13 grid, choose an
-opponent — either a specific hand or another range — and get equity for the
+**Range Explorer.** Paint a hero range on the standard 13x13 grid — by hand,
+or with a "top X%" slider driven by the classic Chen Formula hand ranking —
+choose an opponent (a specific hand or another range), and get equity for the
 matchup. This always samples: averaging exact equities across every combo
 pairing in two wide ranges is well over a million evaluations before a single
 board card is dealt, so `calculateRangeEquity` instead draws one combo from
 each side per iteration and deals the rest of the board, keeping the cost
 roughly constant regardless of range width.
+
+Every individual card position on both pages — a hole card, a board street's
+card, the villain's hand — is a card-back until clicked, at which point a
+picker popover opens scoped to just that one position.
 
 ## Architecture
 
@@ -84,8 +89,8 @@ public/                  Buildless frontend
     main.js                Bootstrap
     router.js              Minimal path-based client router (no dependency)
     AppShell.js             Page shell: nav + route switch
-    pages/                  One component per route (EquityCalculatorPage, RangeExplorerPage)
-    components/             Presentational components, shared across pages
+    pages/                  One component per route (OddsCalculatorPage, RangeExplorerPage)
+    components/             Presentational components, shared across pages (CardSlot, RangeGrid, ...)
     hooks/                  Stateful logic (useHistory)
     services/apiClient.js   All network access
 test/
@@ -272,7 +277,7 @@ see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
 
 ## Roadmap
 
-- [x] Equity calculator with exact enumeration and seeded Monte Carlo
+- [x] Odds calculator with exact enumeration and seeded Monte Carlo
 - [x] Persistent calculation history with replay
 - [x] Range explorer — range-vs-hand and range-vs-range equity via sampling
 - [ ] **Hand simulator** — deal and play out configurable spots from a seeded deck

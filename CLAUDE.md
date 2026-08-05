@@ -170,6 +170,16 @@ range width. Because of that there is no board-only case small enough to
 enumerate exactly once a range is involved — `method` is always `'sampled'`,
 unlike `calculateEquity`.
 
+`chenScore` (`ranges.js`) is the classic Chen Formula — a deterministic,
+by-hand hand-strength heuristic, not a simulation — used to rank all 169
+hands (`HAND_STRENGTH_ORDER`) for two UI features: the range grid's baseline
+heat-map tint (`HAND_TIER`, computed once at module load since the ranking
+never changes) and the "top X%" range slider (`selectTopPercent`, which adds
+whole hand classes off that ranking until the target combo count is reached
+— it never selects a partial class). If this ever needs to become equity-based
+instead of heuristic, `HAND_STRENGTH_ORDER` is the one thing to replace; both
+consumers read through it rather than recomputing anything themselves.
+
 ## Data store
 
 `DataStore` (abstract) → `JsonFileStore` (JSON files) → `HistoryRepository`
@@ -219,7 +229,7 @@ route switch) → `pages/` (one component per route, owns that page's state) →
 normalises the server's `{error: {message, details}}` shape into thrown
 `ApiRequestError`s — components only ever handle exceptions.
 
-**Routing.** Two routes (`/` → Equity Calculator, `/ranges` → Range Explorer)
+**Routing.** Two routes (`/` → Odds Calculator, `/ranges` → Range Explorer)
 didn't justify a router dependency, so `router.js` is a ~50-line hand-rolled
 one: a `useRoute()` hook backed by `history.pushState`/`popstate`, and a
 `Link` component that intercepts a plain left click. This is what "minimise
@@ -230,8 +240,19 @@ when the hand-written version stops being trivial, not before.
 block of design tokens (color, spacing, radii, shadows) that every page's
 classes are built from. Adding a page means composing `.hero-card` /
 `.result-card` / `.ghost-button` and friends with those variables, not
-inventing a new palette — that's what keeps two unrelated features (an equity
+inventing a new palette — that's what keeps two unrelated features (an odds
 calculator, a range grid) looking like one product.
+
+**Card selection: `CardSlot`.** Every individual card position on both pages
+(a player's hole card, a board street's card, the villain's hand) is its own
+`CardSlot` — a card back until clicked, then a `CardPicker` popover scoped to
+just that one position. State is modeled as fixed-size arrays with `null`
+holes (`players[i]` is always `[card|null, card|null]`), never a
+variable-length array built by pushing cards in pick order — that's what lets
+each position be independently addressable instead of the whole hand sharing
+one shared picker underneath it. Only one popover is open at a time, tracked
+as a single `openSlot` id at the page level; opening a new one implicitly
+closes whatever was open.
 
 ## API
 
