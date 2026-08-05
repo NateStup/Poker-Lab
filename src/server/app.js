@@ -17,6 +17,7 @@ import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { createApiRouter } from './routes/index.js';
 import { EquityService } from './services/EquityService.js';
+import { RangeService } from './services/RangeService.js';
 import { createHistoryRepository } from './store/index.js';
 
 /**
@@ -32,6 +33,7 @@ import { createHistoryRepository } from './store/index.js';
 export async function createApp({ historyRepository } = {}) {
   const repository = historyRepository || await createHistoryRepository();
   const equityService = new EquityService({ historyRepository: repository });
+  const rangeService = new RangeService();
 
   const app = express();
 
@@ -56,7 +58,7 @@ export async function createApp({ historyRepository } = {}) {
 
   app.use(express.static(config.paths.public));
 
-  app.use('/api', createApiRouter({ equityService, historyRepository: repository }));
+  app.use('/api', createApiRouter({ equityService, rangeService, historyRepository: repository }));
 
   // Any non-API path falls through to the single-page app, so client-side
   // routing works on a hard refresh. API 404s are still real 404s.

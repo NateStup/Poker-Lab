@@ -1,5 +1,5 @@
 /**
- * Root component for the poker workbench.
+ * Equity Calculator page.
  *
  * Owns the card-selection state for every slot (each player's hole cards, plus
  * flop / turn / river). Holding it in one place is what makes global card
@@ -13,12 +13,12 @@
 
 import { BOARD_SIZE, HOLE_CARD_COUNT } from '/shared/poker/cards.js';
 import { MAX_PLAYERS, MIN_PLAYERS } from '/shared/poker/validation.js';
-import { CardList } from './components/CardBadge.js';
-import { CardPicker } from './components/CardPicker.js';
-import { EquityResult } from './components/EquityResult.js';
-import { HistoryPanel } from './components/HistoryPanel.js';
-import { useHistory } from './hooks/useHistory.js';
-import { calculateEquity } from './services/apiClient.js';
+import { CardPicker } from '../components/CardPicker.js';
+import { CardSlotButton } from '../components/CardSlotButton.js';
+import { EquityResult } from '../components/EquityResult.js';
+import { HistoryPanel } from '../components/HistoryPanel.js';
+import { useHistory } from '../hooks/useHistory.js';
+import { calculateEquity } from '../services/apiClient.js';
 
 const e = React.createElement;
 
@@ -37,7 +37,7 @@ function emptySelection() {
   return { players: [[], []], flop: [], turn: [], river: [] };
 }
 
-export function PokerApp() {
+export function EquityCalculatorPage() {
   const [selection, setSelection] = React.useState(emptySelection);
   const [activeSlot, setActiveSlot] = React.useState('player-0');
   const [iterations, setIterations] = React.useState(20000);
@@ -163,8 +163,8 @@ export function PokerApp() {
   }
 
   return e(
-    'div',
-    { className: 'calculator-shell' },
+    React.Fragment,
+    null,
     e(
       'div',
       { className: 'hero-card' },
@@ -198,7 +198,7 @@ export function PokerApp() {
             'div',
             { className: 'slot-grid' },
             selection.players.map((cards, index) =>
-              e(SlotButton, {
+              e(CardSlotButton, {
                 key: `player-${index}`,
                 slotId: `player-${index}`,
                 label: `Player ${index + 1}`,
@@ -219,7 +219,7 @@ export function PokerApp() {
             'div',
             { className: 'slot-grid' },
             BOARD_SLOTS.map(slot =>
-              e(SlotButton, {
+              e(CardSlotButton, {
                 key: slot.id,
                 slotId: slot.id,
                 label: slot.label,
@@ -251,7 +251,11 @@ export function PokerApp() {
               type: 'number',
               min: 100,
               max: 500000,
-              step: 1000,
+              // Must divide evenly into (value - min): with a 1000 step and
+              // min 100, the browser's own number-input validation rejects
+              // round values like the 20000 default, blocking submission
+              // with no visible error beyond a native tooltip.
+              step: 100,
               value: iterations,
               onChange: event => setIterations(Number(event.target.value) || 100)
             }),
@@ -280,37 +284,6 @@ export function PokerApp() {
       onDelete: history.remove,
       onClear: history.clear
     })
-  );
-}
-
-/**
- * A clickable target representing one card slot.
- * @param {{slotId: string, label: string, cards: string[], isActive: boolean,
- *   onSelect: (id: string) => void, onRemove: (() => void)|null}} props
- */
-function SlotButton({ slotId, label, cards, isActive, onSelect, onRemove }) {
-  return e(
-    'div',
-    { className: 'slot-wrapper' },
-    e(
-      'button',
-      {
-        type: 'button',
-        className: `picker-target ${isActive ? 'is-active' : ''}`,
-        onClick: () => onSelect(slotId),
-        'aria-pressed': isActive
-      },
-      e('span', { className: 'slot-label' }, label),
-      e('span', { className: 'preview-text' }, e(CardList, { cards, placeholder: 'Empty' }))
-    ),
-    onRemove
-      ? e('button', {
-          type: 'button',
-          className: 'ghost-button danger slot-remove',
-          onClick: onRemove,
-          'aria-label': `Remove ${label}`
-        }, '×')
-      : null
   );
 }
 

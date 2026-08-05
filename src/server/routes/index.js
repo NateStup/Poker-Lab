@@ -10,15 +10,17 @@ import { Router } from 'express';
 
 import { createEquityRouter } from './equityRoutes.js';
 import { createHistoryRouter } from './historyRoutes.js';
+import { createRangeRouter } from './rangeRoutes.js';
 
 /**
  * @param {{
  *   equityService: import('../services/EquityService.js').EquityService,
+ *   rangeService: import('../services/RangeService.js').RangeService,
  *   historyRepository: import('../store/HistoryRepository.js').HistoryRepository
  * }} deps
  * @returns {import('express').Router}
  */
-export function createApiRouter({ equityService, historyRepository }) {
+export function createApiRouter({ equityService, rangeService, historyRepository }) {
   const router = Router();
 
   /** Liveness probe -- useful locally and required by most hosting platforms. */
@@ -27,6 +29,7 @@ export function createApiRouter({ equityService, historyRepository }) {
   });
 
   router.use('/equity', createEquityRouter({ equityService }));
+  router.use('/ranges', createRangeRouter({ rangeService }));
   router.use('/history', createHistoryRouter({ historyRepository }));
 
   return router;

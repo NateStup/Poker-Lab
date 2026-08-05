@@ -1,8 +1,9 @@
 # Poker Lab
 
 A client/server poker toolkit built on Node, Express, and React — a Texas
-Hold'em equity calculator with a persistent calculation history, and the
-foundation for a hand simulator and session tracker.
+Hold'em equity calculator with a persistent calculation history, a range
+explorer for range-vs-hand and range-vs-range equity, and the foundation for a
+hand simulator and session tracker.
 
 Built as a portfolio project, so the emphasis is on architecture that holds up
 under reading: a pure domain layer shared verbatim between server and browser,
@@ -19,7 +20,7 @@ npm start
 
 ```bash
 npm run dev    # auto-restart on change
-npm test       # 127 tests, no test framework dependency
+npm test       # 174 tests, no test framework dependency
 ```
 
 Requires **Node 20.11 or newer**. No build step — the frontend is served as
@@ -27,8 +28,8 @@ native ES modules.
 
 ## What it does
 
-Pick hole cards for two to six players, optionally set a flop, turn, or river,
-and get each player's equity.
+**Equity Calculator.** Pick hole cards for two to six players, optionally set
+a flop, turn, or river, and get each player's equity.
 
 The engine chooses its own strategy and tells you which it used:
 
@@ -47,6 +48,14 @@ than merely recorded.
 Every calculation is written to a JSON-backed store and shown in a history panel
 that can reload a past spot back into the form.
 
+**Range Explorer.** Paint a hero range on the standard 13x13 grid, choose an
+opponent — either a specific hand or another range — and get equity for the
+matchup. This always samples: averaging exact equities across every combo
+pairing in two wide ranges is well over a million evaluations before a single
+board card is dealt, so `calculateRangeEquity` instead draws one combo from
+each side per iteration and deals the rest of the board, keeping the cost
+roughly constant regardless of range width.
+
 ## Architecture
 
 ```
@@ -56,6 +65,8 @@ src/
     deck.js                Stateful shufflable deck
     handEvaluator.js       5–7 card evaluation and comparison
     equity.js              Exact enumeration + Monte Carlo equity
+    ranges.js              169-hand range grid, hand codes, combo expansion
+    rangeEquity.js         Range-vs-hand / range-vs-range sampled equity
     rng.js                 Seedable PRNG (mulberry32)
     validation.js          Request validation, shared by client and server
   server/
@@ -68,12 +79,15 @@ src/
     middleware/            Error handling, async wrapper
     errors/                ApiError
 public/                  Buildless frontend
+  stylesheets/style.css   Design tokens (:root variables) + shared + per-page styles
   javascripts/poker/
     main.js                Bootstrap
-    PokerApp.js            Root component and selection state
-    components/            Presentational components
-    hooks/                 Stateful logic (useHistory)
-    services/apiClient.js  All network access
+    router.js              Minimal path-based client router (no dependency)
+    AppShell.js             Page shell: nav + route switch
+    pages/                  One component per route (EquityCalculatorPage, RangeExplorerPage)
+    components/             Presentational components, shared across pages
+    hooks/                  Stateful logic (useHistory)
+    services/apiClient.js   All network access
 test/
   shared/                Domain tests
   server/                Store and end-to-end API tests
@@ -156,6 +170,37 @@ All endpoints live under `/api` and speak JSON, including errors.
 Cards are `rank + suit`: ranks `23456789TJQKA`, suits `shdc`. Input is
 case-normalised, so `as` and `AS` both mean the ace of spades.
 
+### `POST /api/ranges/equity`
+
+```json
+{
+  "heroRange": ["AA", "AKs"],
+  "villain": { "cards": ["Kd", "Kc"] },
+  "board": [],
+  "iterations": 20000,
+  "seed": "optional-for-reproducibility"
+}
+```
+
+`villain` is either `{ "cards": [c1, c2] }` (a specific hand) or
+`{ "hands": ["KK", "QQ"] }` (a range, same hand-code shorthand as `heroRange`).
+
+```json
+{
+  "hero": { "win": 0.8534, "tie": 0.0021, "equity": 0.8545, "wins": 17068, "ties": 42, "comboCount": 16 },
+  "villain": { "win": 0.1445, "tie": 0.0021, "equity": 0.1455, "wins": 2890, "ties": 42, "comboCount": 1 },
+  "board": [],
+  "method": "sampled",
+  "iterations": 20000,
+  "seed": 1234567890,
+  "durationMs": 61
+}
+```
+
+Unlike `/api/equity`, `method` is always `"sampled"` — there is no board-only
+case small enough to enumerate exactly once a range is involved — and no
+history record is created.
+
 ### Other endpoints
 
 | Method | Path | Purpose |
@@ -185,7 +230,7 @@ Errors are consistently shaped, with field-level detail where it exists:
 npm test
 ```
 
-127 tests via Node's built-in runner — no Jest, Mocha, or Chai.
+174 tests via Node's built-in runner — no Jest, Mocha, or Chai.
 
 The domain tests deliberately favour assertions that are **provable by hand**
 over published percentages: a player holding the nut straight flush on a
@@ -229,6 +274,7 @@ see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
 
 - [x] Equity calculator with exact enumeration and seeded Monte Carlo
 - [x] Persistent calculation history with replay
+- [x] Range explorer — range-vs-hand and range-vs-range equity via sampling
 - [ ] **Hand simulator** — deal and play out configurable spots from a seeded deck
 - [ ] **Session tracker** — aggregate stored results into trends over time
 - [ ] CI pipeline (GitHub Actions) with test runs and build artifacts
