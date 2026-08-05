@@ -26,6 +26,33 @@ Environment: `PORT`, `HOST`, `NODE_ENV`, `DATA_DIR`, `MAX_HISTORY_RECORDS`,
 
 Requires Node >= 20.11.
 
+## Git workflow
+
+**Never commit or push directly to `main`.** Every change, including small
+fixes, goes through a feature branch and a pull request:
+
+```bash
+git checkout -b <descriptive-branch-name>
+# commit your changes
+git push -u origin <descriptive-branch-name>
+gh pr create
+```
+
+`main` is not currently protected server-side — the repo is private on GitHub's
+free plan, which blocks branch protection / rulesets unless the repo is public
+or on GitHub Pro. This is a workflow discipline to follow regardless. If the
+repo later goes public or upgrades, apply:
+
+```bash
+gh api --method PUT repos/NateStup/myExpressApp/branches/main/protection \
+  -H "Accept: application/vnd.github+json" \
+  -f 'required_status_checks=null' \
+  -F 'enforce_admins=true' \
+  -f 'required_pull_request_reviews[required_approving_review_count]=1' \
+  -f 'required_pull_request_reviews[dismiss_stale_reviews]=false' \
+  -f 'restrictions=null'
+```
+
 ## Architecture
 
 ```
