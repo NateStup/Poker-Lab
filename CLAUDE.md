@@ -8,9 +8,11 @@ Guidance for working in this repository.
 the code is meant to be *read*: clarity, structure, and comments that explain
 reasoning matter as much as behaviour.
 
-Shipped: a Texas Hold'em equity calculator with persistent history, and a
-range explorer for range-vs-hand and range-vs-range equity.
-Next up: a hand simulator, then a session tracker (see [Roadmap](#roadmap)).
+Shipped: a Texas Hold'em odds calculator with persistent history and exact
+outs, a range explorer (range-vs-hand and range-vs-range equity, range
+notation import/export, a Chen-formula "top X%" slider), and a tournament
+manager (registration, buy-ins/rebuys/add-ons, a blind clock, and payouts).
+Next up: a session tracker (see [Roadmap](#roadmap)).
 
 ## Commands
 
@@ -58,22 +60,28 @@ gh api --method PUT repos/NateStup/myExpressApp/branches/main/protection \
 
 ```
 src/
-  shared/poker/     Pure domain logic. Isomorphic — runs in Node AND the browser.
-  server/           Express app: config, routes, services, store, middleware.
-public/             Static frontend. Buildless native ES modules + CDN React.
-test/shared/        Domain tests.
-test/server/        Store and end-to-end API tests.
-data/               JSON data store (contents gitignored).
+  shared/poker/       Pure poker domain logic. Isomorphic — runs in Node AND the browser.
+  shared/tournament/  Pure tournament domain logic (blind clock, stats, payouts). Same rules.
+  server/             Express app: config, routes, services, store, middleware.
+public/               Static frontend. Buildless native ES modules + CDN React.
+test/shared/          Domain tests (test/shared/tournament/ mirrors src/shared/tournament/).
+test/server/          Store and end-to-end API tests.
+data/                 JSON data store (contents gitignored).
 ```
 
 Request flow: `route → service → domain` on the way in, `→ store` on the way out.
 
 ### The one rule that shapes everything: shared domain code
 
-`src/shared/poker/` is served to the browser at `/shared/` (see the static mount
-in [src/server/app.js](src/server/app.js)). Server code imports it by relative
-path; client code imports it as `/shared/poker/cards.js`. **One implementation,
-two consumers.**
+`src/shared/` (both `poker/` and `tournament/`) is served to the browser at
+`/shared/` (see the static mount in [src/server/app.js](src/server/app.js)).
+Server code imports it by relative path; client code imports it as
+`/shared/poker/cards.js` or `/shared/tournament/index.js`. **One
+implementation, two consumers.** The tournament clock is the clearest example
+of why this matters: `computeClockState` runs identically on the server (to
+produce `derived.clock` in an API response) and in the browser (to tick the
+countdown once a second between syncs) — there is no second implementation
+to drift out of sync with the first.
 
 This exists because the project previously had two hand evaluators — one in
 `lib/poker.js`, one in `public/javascripts/poker/modules/evaluator.js` — that
@@ -91,13 +99,14 @@ Consequences to respect:
 
 | Layer | Location | Rule |
 |---|---|---|
-| Domain | `src/shared/poker/` | Pure functions and classes. No I/O. Fully unit-testable. |
+| Domain | `src/shared/poker/`, `src/shared/tournament/` | Pure functions and classes. No I/O. Fully unit-testable. |
 | Service | `src/server/services/` | Orchestrates domain + store. Takes dependencies via constructor injection. |
 | Route | `src/server/routes/` | Thin: parse, delegate, respond. Built by a `createXRouter({deps})` factory so tests can inject stubs. |
 | Store | `src/server/store/` | Persistence behind the `DataStore` interface. |
 
-`createApp({historyRepository})` accepts an injected repository — that is how the
-API tests run against a temp directory instead of real data.
+`createApp({historyRepository, tournamentRepository})` accepts injected
+repositories — that is how the API tests run against temp directories instead
+of real data.
 
 ## Conventions
 
@@ -180,6 +189,46 @@ whole hand classes off that ranking until the target combo count is reached
 instead of heuristic, `HAND_STRENGTH_ORDER` is the one thing to replace; both
 consumers read through it rather than recomputing anything themselves.
 
+`calculateOuts` (`outs.js`) is exact, not sampled — at most 46 unseen cards
+on a flop, so every one is just dealt and evaluated rather than estimated.
+Deliberately scoped to two players with an incomplete board: with three or
+more players a card can help one opponent while hurting another, so there is
+no single meaningful "outs" count per player without first picking which
+opponents it must beat — exactly the ambiguity `calculateEquity`'s sampling
+sidesteps by reporting a probability instead.
+
+`parseRangeString`/`formatRangeString` (`rangeNotation.js`) round-trip the
+standard shorthand every range tool uses (`'22+'`, `'A5s+'`, `'77-TT'`).
+`formatRangeString` groups each "family" (all pairs; one top card's suited
+hands; one top card's offsuit hands) strongest-to-weakest and only ever emits
+`+` when a run reaches the strongest hand in its family — that's the actual
+meaning of `+`, not just "some hands compressed."
+
+## Tournament domain (`src/shared/tournament/`)
+
+A tournament never has a live chip count typed in for any player — that
+would be exactly the manual bookkeeping this feature exists to remove.
+Instead every number derives from two kinds of event: an **entry** (buy-in,
+rebuy, or add-on, each worth a fixed chip amount and dollar amount) and an
+**elimination**. `totalChipsInPlay`/`prizePool` are sums over entries;
+`averageStack` is total chips divided by players still in (`stats.js`).
+
+`generateBlindStructure` produces a suggested schedule off a fixed "nice
+chip denominations" ladder — a starting point the organizer is expected to
+edit, not a solved schedule. `computeClockState` (`blindStructure.js`) is the
+pure function both the server (`derived.clock` in an API response) and the
+browser (the ticking countdown) call with the same inputs; it takes the raw
+clock record and a timestamp and has no side effects, which is what makes it
+identical in both places. A finishing place is assigned by counting down from
+the entrant count on each elimination (`TournamentRepository.eliminatePlayer`
+in `src/server/store/`) — once exactly one player remains, they're
+place 1 and the tournament auto-completes; no separate "end tournament" step
+for the common case.
+
+`calculatePayouts` (`payouts.js`) rounds each place independently and folds
+the entire rounding remainder into first place, so payouts always sum to
+exactly the prize pool and only one place's number is ever adjusted for it.
+
 ## Data store
 
 `DataStore` (abstract) → `JsonFileStore` (JSON files) → `HistoryRepository`
@@ -197,6 +246,14 @@ so swapping in SQLite means one new class and one line in
 
 History records store the request, the result, *and the seed*. A stored result is
 only meaningful if the run can be replayed.
+
+`DataStore#update(id, updater)` is a read-modify-write: `HistoryRepository`
+never needed it (a calculation result is immutable once stored), but
+`TournamentRepository` uses it for everything after creation — a tournament's
+roster, clock, and blind level all change constantly. The read, `updater`
+call, and write into the in-memory array happen synchronously in one tick
+(only the disk `flush()` after is async), so two `update()` calls on the same
+id can't interleave and silently lose one's change.
 
 ## Testing
 
@@ -229,12 +286,13 @@ route switch) → `pages/` (one component per route, owns that page's state) →
 normalises the server's `{error: {message, details}}` shape into thrown
 `ApiRequestError`s — components only ever handle exceptions.
 
-**Routing.** Two routes (`/` → Odds Calculator, `/ranges` → Range Explorer)
-didn't justify a router dependency, so `router.js` is a ~50-line hand-rolled
-one: a `useRoute()` hook backed by `history.pushState`/`popstate`, and a
-`Link` component that intercepts a plain left click. This is what "minimise
-dependencies" (see Conventions) looks like in practice — reach for a library
-when the hand-written version stops being trivial, not before.
+**Routing.** Three routes (`/` → Odds Calculator, `/ranges` → Range Explorer,
+`/tournament` → Tournament Manager) didn't justify a router dependency, so
+`router.js` is a ~50-line hand-rolled one: a `useRoute()` hook backed by
+`history.pushState`/`popstate`, and a `Link` component that intercepts a
+plain left click. This is what "minimise dependencies" (see Conventions)
+looks like in practice — reach for a library when the hand-written version
+stops being trivial, not before.
 
 **Shared look and feel.** `public/stylesheets/style.css` opens with a `:root`
 block of design tokens (color, spacing, radii, shadows) that every page's
@@ -254,6 +312,18 @@ one shared picker underneath it. Only one popover is open at a time, tracked
 as a single `openSlot` id at the page level; opening a new one implicitly
 closes whatever was open.
 
+**The tournament clock's tick vs. sync split.** `TournamentManagerPage` does
+not poll once a second to animate the countdown — it re-renders once a
+second (a `setInterval` that only increments a counter) and recomputes
+`computeClockState` locally from the server's raw `levelStartedAt`/
+`pausedElapsedMs` each time, which is why the countdown is smooth with zero
+extra network traffic. A separate, slower interval (every few seconds)
+re-fetches the tournament to catch changes made from another device. When
+the locally-computed countdown reaches zero, this page calls the advance
+action once (guarded by a ref so a fast series of re-renders can't double-fire)
+— there is no server-side cron doing it, so a tournament nobody has open just
+waits at `0:00` rather than silently skipping levels in the background.
+
 ## API
 
 | Method | Path | Purpose |
@@ -266,6 +336,15 @@ closes whatever was open.
 | `GET` | `/api/history/:id` | Single record |
 | `DELETE` | `/api/history/:id` | Delete one |
 | `DELETE` | `/api/history` | Clear all |
+| `POST` | `/api/tournaments` | Create a tournament |
+| `GET` | `/api/tournaments` | List tournaments (lightweight summaries) |
+| `GET` | `/api/tournaments/:id` | Full record, decorated with `derived` (clock, stats, payouts) |
+| `PATCH` | `/api/tournaments/:id` | Update settings; only while `status === 'setup'` |
+| `DELETE` | `/api/tournaments/:id` | Delete a tournament |
+| `POST` | `/api/tournaments/:id/players` | Register a player |
+| `DELETE` | `/api/tournaments/:id/players/:playerId` | Remove a registration; only while `status === 'setup'` |
+| `PATCH` | `/api/tournaments/:id/players/:playerId` | `{action: 'rebuy'\|'addon'\|'eliminate'\|'reinstate'}` |
+| `PATCH` | `/api/tournaments/:id/clock` | `{action: 'start'\|'pause'\|'resume'\|'advance'\|'setLevel', levelIndex?}` |
 
 Everything under `/api`. Non-API paths fall through to `index.html` so
 client-side routing survives a hard refresh; API 404s stay real 404s.
@@ -280,6 +359,9 @@ Keep this section current — it is how a new session learns what "next" means.
    discriminator in `HistoryRepository`.
 2. **Session tracker** — aggregate stored records into trends over time.
 3. **PR process** — GitHub Actions running `npm test`, plus build artifacts.
+4. **Tournament seating/table balancing** — the manager currently tracks
+   registration, stacks, the clock, and payouts, but not seat assignments;
+   a natural extension once multi-table events are in scope.
 
 ## Gotchas
 

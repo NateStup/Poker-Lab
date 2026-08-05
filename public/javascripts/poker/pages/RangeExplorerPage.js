@@ -20,6 +20,7 @@ import { ALL_HANDS, TOTAL_COMBOS, rangeComboCount, selectTopPercent } from '/sha
 import { CardSlot } from '../components/CardSlot.js';
 import { RangeEquityResult } from '../components/RangeEquityResult.js';
 import { RangeGrid } from '../components/RangeGrid.js';
+import { RangeNotation } from '../components/RangeNotation.js';
 import { calculateRangeEquity } from '../services/apiClient.js';
 
 const e = React.createElement;
@@ -244,7 +245,11 @@ export function RangeExplorerPage() {
             className: 'ghost-button',
             onClick: () => { setHeroHands(new Set(ALL_HANDS)); setHeroPercent(100); }
           }, 'Select all')
-        )
+        ),
+        e(RangeNotation, {
+          hands: heroHands,
+          onApply: hands => { setHeroHands(new Set(hands)); setHeroPercent(0); }
+        })
       ),
 
       e(
@@ -320,7 +325,11 @@ export function RangeExplorerPage() {
                   className: 'ghost-button',
                   onClick: () => { setVillainHands(new Set(ALL_HANDS)); setVillainPercent(100); }
                 }, 'Select all')
-              )
+              ),
+              e(RangeNotation, {
+                hands: villainHands,
+                onApply: hands => { setVillainHands(new Set(hands)); setVillainPercent(0); }
+              })
             )
       )
     ),

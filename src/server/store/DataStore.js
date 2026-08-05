@@ -43,6 +43,24 @@ export class DataStore {
   }
 
   /**
+   * Read-modify-write a single record. `HistoryRepository` never needed this
+   * (a calculation result is immutable once stored), but a tournament's
+   * player roster, clock, and blind level all change after creation, so its
+   * repository needs a way to mutate one record without racing a concurrent
+   * write to the same file -- that's why this takes an updater function
+   * rather than a replacement value; the implementation applies it against
+   * whatever the current stored value is, not whatever the caller last read.
+   *
+   * @param {string} _id
+   * @param {(current: object) => object} _updater receives the current record,
+   *   returns the fields to merge over it
+   * @returns {Promise<object|null>} the updated record, or `null` if `_id` doesn't exist
+   */
+  async update(_id, _updater) {
+    throw new Error(`${this.constructor.name} must implement update()`);
+  }
+
+  /**
    * @param {string} _id
    * @returns {Promise<boolean>} whether a record was removed
    */

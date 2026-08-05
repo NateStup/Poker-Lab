@@ -1,9 +1,10 @@
 # Poker Lab
 
 A client/server poker toolkit built on Node, Express, and React — a Texas
-Hold'em odds calculator with a persistent calculation history, a range
-explorer for range-vs-hand and range-vs-range equity, and the foundation for a
-hand simulator and session tracker.
+Hold'em odds calculator with persistent history and exact outs, a range
+explorer for range-vs-hand and range-vs-range equity, a tournament manager
+with a live blind clock and payouts, and the foundation for a hand simulator
+and session tracker.
 
 Built as a portfolio project, so the emphasis is on architecture that holds up
 under reading: a pure domain layer shared verbatim between server and browser,
@@ -20,7 +21,7 @@ npm start
 
 ```bash
 npm run dev    # auto-restart on change
-npm test       # 174 tests, no test framework dependency
+npm test       # 258 tests, no test framework dependency
 ```
 
 Requires **Node 20.11 or newer**. No build step — the frontend is served as
@@ -46,7 +47,10 @@ is stored with the result — which is what makes a saved run reproducible rathe
 than merely recorded.
 
 Every calculation is written to a JSON-backed store and shown in a history panel
-that can reload a past spot back into the form.
+that can reload a past spot back into the form. Whenever the board is a flop
+or turn (heads-up only), the result also breaks down each player's **outs** —
+the exact unseen cards that make them the winner or a chop on the very next
+card, computed by enumeration rather than sampled.
 
 **Range Explorer.** Paint a hero range on the standard 13x13 grid — by hand,
 or with a "top X%" slider driven by the classic Chen Formula hand ranking —
@@ -59,20 +63,39 @@ roughly constant regardless of range width.
 
 Every individual card position on both pages — a hole card, a board street's
 card, the villain's hand — is a card-back until clicked, at which point a
-picker popover opens scoped to just that one position.
+picker popover opens scoped to just that one position. Ranges can also be
+pasted or copied as standard shorthand (`22+,A5s+,KTo+`) via the range
+notation box under each grid.
+
+**Tournament Manager.** Register players, then run the event: each buy-in,
+rebuy, and add-on feeds a running chip count and prize pool (no stack is ever
+typed in by hand), and each elimination is assigned a finishing place by
+counting down from the field size — the last player standing is
+auto-declared the winner. A live blind clock (with a suggested structure you
+can edit) counts down locally in the browser between server syncs, chimes on
+every level change, and pauses/resumes/advances on command. A payout panel
+computes amounts from the prize pool and a percentage split the moment there's
+money in the pool, before anyone's even been eliminated.
 
 ## Architecture
 
 ```
 src/
-  shared/poker/          Pure domain — runs in Node AND the browser
+  shared/poker/          Pure poker domain — runs in Node AND the browser
     cards.js               Card primitives, deck construction, board assembly
     deck.js                Stateful shufflable deck
     handEvaluator.js       5–7 card evaluation and comparison
     equity.js              Exact enumeration + Monte Carlo equity
-    ranges.js              169-hand range grid, hand codes, combo expansion
+    outs.js                Exact outs (heads-up, incomplete board)
+    ranges.js              169-hand range grid, hand codes, Chen-formula ranking
+    rangeNotation.js       Standard range shorthand parse/format ('22+', 'A5s+')
     rangeEquity.js         Range-vs-hand / range-vs-range sampled equity
     rng.js                 Seedable PRNG (mulberry32)
+    validation.js          Request validation, shared by client and server
+  shared/tournament/     Pure tournament domain — same isomorphic rule
+    blindStructure.js      Suggested blind schedule + clock math
+    stats.js               Chip counts, average stack, prize pool
+    payouts.js             Payout suggestions + exact-sum calculation
     validation.js          Request validation, shared by client and server
   server/
     app.js                 Express assembly (exported as a factory)
@@ -80,7 +103,7 @@ src/
     config.js              All environment resolution, in one place
     routes/                Thin HTTP handlers built by dependency-taking factories
     services/              Orchestration between domain and store
-    store/                 DataStore → JsonFileStore → HistoryRepository
+    store/                 DataStore → JsonFileStore → {History,Tournament}Repository
     middleware/            Error handling, async wrapper
     errors/                ApiError
 public/                  Buildless frontend
@@ -89,12 +112,12 @@ public/                  Buildless frontend
     main.js                Bootstrap
     router.js              Minimal path-based client router (no dependency)
     AppShell.js             Page shell: nav + route switch
-    pages/                  One component per route (OddsCalculatorPage, RangeExplorerPage)
-    components/             Presentational components, shared across pages (CardSlot, RangeGrid, ...)
+    pages/                  One component per route (OddsCalculatorPage, RangeExplorerPage, TournamentManagerPage)
+    components/             Presentational components, shared across pages (CardSlot, RangeGrid, TournamentClock, ...)
     hooks/                  Stateful logic (useHistory)
     services/apiClient.js   All network access
 test/
-  shared/                Domain tests
+  shared/                Domain tests (shared/tournament/ mirrors src/shared/tournament/)
   server/                Store and end-to-end API tests
 data/                    JSON store (contents gitignored)
 ```
@@ -131,13 +154,16 @@ against a temp directory.
 ### Data store
 
 `DataStore` defines the contract; `JsonFileStore` implements it over JSON files;
-`HistoryRepository` exposes a domain-level API on top. Services depend on the
-repository, so moving to SQLite or Postgres means one new class and one changed
-line.
+`HistoryRepository` and `TournamentRepository` each expose a domain-level API
+on top of the same store class. Services depend on the repository, so moving
+to SQLite or Postgres means one new class and one changed line.
 
 The file store is small but not naive — it guards against torn writes (temp file
 plus atomic rename), interleaved writes (a serialised flush chain), concurrent
-initialisation, and corrupt files on load (quarantined rather than fatal).
+initialisation, and corrupt files on load (quarantined rather than fatal). It
+also supports a read-modify-write `update(id, updater)` — history records are
+immutable once written, but a tournament's roster and clock change
+constantly, which is what that method is for.
 
 ## API
 
@@ -206,6 +232,40 @@ Unlike `/api/equity`, `method` is always `"sampled"` — there is no board-only
 case small enough to enumerate exactly once a range is involved — and no
 history record is created.
 
+### Tournaments
+
+```
+POST   /api/tournaments                          create
+GET    /api/tournaments                          list (lightweight summaries)
+GET    /api/tournaments/:id                      full record + derived clock/stats/payouts
+PATCH  /api/tournaments/:id                       update settings (setup only)
+DELETE /api/tournaments/:id                       delete
+POST   /api/tournaments/:id/players               register a player
+DELETE /api/tournaments/:id/players/:playerId     remove a registration (setup only)
+PATCH  /api/tournaments/:id/players/:playerId     {action: 'rebuy'|'addon'|'eliminate'|'reinstate'}
+PATCH  /api/tournaments/:id/clock                 {action: 'start'|'pause'|'resume'|'advance'|'setLevel', levelIndex?}
+```
+
+`GET /api/tournaments/:id` decorates the stored record with `derived`,
+computed fresh on every read from `shared/tournament/`:
+
+```json
+{
+  "derived": {
+    "clock": { "levelIndex": 2, "level": { "smallBlind": 75, "bigBlind": 150, "ante": 75, "durationMinutes": 15 }, "remainingMs": 421000, "isFinalLevel": false },
+    "totalChipsInPlay": 60000,
+    "activePlayerCount": 5,
+    "averageStack": 12000,
+    "prizePool": 120,
+    "payouts": [{ "place": 1, "percent": 50, "amount": 60 }, { "place": 2, "percent": 30, "amount": 36 }, { "place": 3, "percent": 20, "amount": 24 }]
+  }
+}
+```
+
+Eliminating a player downto one active entrant auto-completes the tournament
+and assigns first place; there's no separate "end tournament" step for the
+common case.
+
 ### Other endpoints
 
 | Method | Path | Purpose |
@@ -235,7 +295,7 @@ Errors are consistently shaped, with field-level detail where it exists:
 npm test
 ```
 
-174 tests via Node's built-in runner — no Jest, Mocha, or Chai.
+258 tests via Node's built-in runner — no Jest, Mocha, or Chai.
 
 The domain tests deliberately favour assertions that are **provable by hand**
 over published percentages: a player holding the nut straight flush on a
@@ -279,9 +339,13 @@ see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
 
 - [x] Odds calculator with exact enumeration and seeded Monte Carlo
 - [x] Persistent calculation history with replay
+- [x] Exact outs (heads-up, incomplete board)
 - [x] Range explorer — range-vs-hand and range-vs-range equity via sampling
+- [x] Range notation import/export and a Chen-formula "top X%" slider
+- [x] Tournament manager — registration, buy-ins/rebuys/add-ons, a live blind clock, payouts
 - [ ] **Hand simulator** — deal and play out configurable spots from a seeded deck
 - [ ] **Session tracker** — aggregate stored results into trends over time
+- [ ] Tournament seating/table balancing
 - [ ] CI pipeline (GitHub Actions) with test runs and build artifacts
 - [ ] Database-backed store
 

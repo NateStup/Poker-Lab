@@ -17,6 +17,7 @@ import { after, before, describe, it } from 'node:test';
 import { createApp } from '../../src/server/app.js';
 import { HistoryRepository } from '../../src/server/store/HistoryRepository.js';
 import { JsonFileStore } from '../../src/server/store/JsonFileStore.js';
+import { TournamentRepository } from '../../src/server/store/TournamentRepository.js';
 
 let server;
 let baseUrl;
@@ -45,7 +46,12 @@ before(async () => {
   );
   await historyRepository.init();
 
-  const app = await createApp({ historyRepository });
+  const tournamentRepository = new TournamentRepository(
+    new JsonFileStore({ filePath: path.join(tempDir, 'tournaments.json') })
+  );
+  await tournamentRepository.init();
+
+  const app = await createApp({ historyRepository, tournamentRepository });
   server = http.createServer(app);
 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -273,6 +279,123 @@ describe('/api/history', () => {
     assert.equal(status, 200);
     assert.ok(body.removed > 0);
     assert.equal((await api('/api/history')).body.total, 0);
+  });
+});
+
+describe('/api/tournaments', () => {
+  it('creates a tournament with defaulted settings', async () => {
+    const { status, body } = await api('/api/tournaments', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Friday night' })
+    });
+
+    assert.equal(status, 201);
+    assert.equal(body.name, 'Friday night');
+    assert.equal(body.status, 'setup');
+    assert.ok(body.structure.length > 0);
+    assert.equal(body.derived.activePlayerCount, 0);
+    assert.equal(body.derived.prizePool, 0);
+  });
+
+  it('rejects a tournament with no name', async () => {
+    const { status, body } = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({}) });
+    assert.equal(status, 400);
+    assert.equal(body.error.code, 'BAD_REQUEST');
+  });
+
+  it('lists tournaments newest first with summary fields', async () => {
+    const { body } = await api('/api/tournaments');
+    assert.ok(body.total >= 1);
+    assert.ok('playerCount' in body.items[0]);
+    assert.ok(!('players' in body.items[0]), 'the list view should be a lightweight summary');
+  });
+
+  it('runs a full lifecycle: register, buy in, start the clock, and eliminate down to a winner', async () => {
+    const created = await api('/api/tournaments', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Lifecycle test', startingStack: 5000, buyIn: 10 })
+    });
+    const id = created.body.id;
+
+    const p1 = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Alice' }) });
+    const p2 = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Bob' }) });
+    assert.equal(p1.status, 201);
+    assert.equal(p2.body.players.length, 2);
+    assert.equal(p2.body.derived.totalChipsInPlay, 10000);
+    assert.equal(p2.body.derived.averageStack, 5000);
+
+    const alicePlayerId = p2.body.players[0].id;
+    const rebuy = await api(`/api/tournaments/${id}/players/${alicePlayerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'rebuy' })
+    });
+    assert.equal(rebuy.body.players[0].rebuys, 1);
+    assert.equal(rebuy.body.derived.prizePool, 30); // 10 + 10 + 10 (rebuy)
+
+    const started = await api(`/api/tournaments/${id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) });
+    assert.equal(started.status, 200);
+    assert.equal(started.body.status, 'active');
+    assert.equal(started.body.derived.clock.levelIndex, 0);
+
+    const bobPlayerId = p2.body.players[1].id;
+    const eliminated = await api(`/api/tournaments/${id}/players/${bobPlayerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'eliminate' })
+    });
+    assert.equal(eliminated.body.status, 'completed', 'one player remaining decides the tournament');
+    assert.equal(eliminated.body.players.find(p => p.id === alicePlayerId).place, 1);
+    assert.equal(eliminated.body.derived.payouts[0].amount, eliminated.body.derived.prizePool);
+  });
+
+  it('rejects an unknown player action', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Bad action test' }) });
+    const registered = await api(`/api/tournaments/${created.body.id}/players`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Eve' })
+    });
+    const playerId = registered.body.players[0].id;
+
+    const { status, body } = await api(`/api/tournaments/${created.body.id}/players/${playerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'not-a-real-action' })
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error.code, 'BAD_REQUEST');
+  });
+
+  it('refuses to pause a clock that is not running', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Pause test' }) });
+    const { status, body } = await api(`/api/tournaments/${created.body.id}/clock`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'pause' })
+    });
+    assert.equal(status, 422);
+    assert.equal(body.error.code, 'UNPROCESSABLE');
+  });
+
+  it('refuses to change settings once the tournament has started', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Settings test' }) });
+    await api(`/api/tournaments/${created.body.id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) });
+
+    const { status, body } = await api(`/api/tournaments/${created.body.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' })
+    });
+    assert.equal(status, 422);
+    assert.equal(body.error.code, 'UNPROCESSABLE');
+  });
+
+  it('404s for an unknown tournament', async () => {
+    const { status, body } = await api('/api/tournaments/not-a-real-id');
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+  });
+
+  it('deletes a tournament', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Deletable' }) });
+    const { status } = await api(`/api/tournaments/${created.body.id}`, { method: 'DELETE' });
+    assert.equal(status, 204);
+    assert.equal((await api(`/api/tournaments/${created.body.id}`)).status, 404);
   });
 });
 

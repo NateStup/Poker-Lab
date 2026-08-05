@@ -16,6 +16,7 @@
  */
 
 import { BOARD_SIZE, HOLE_CARD_COUNT } from '/shared/poker/cards.js';
+import { calculateOuts } from '/shared/poker/outs.js';
 import { MAX_PLAYERS, MIN_PLAYERS } from '/shared/poker/validation.js';
 import { CardSlot } from '../components/CardSlot.js';
 import { EquityResult } from '../components/EquityResult.js';
@@ -82,6 +83,7 @@ export function OddsCalculatorPage() {
   const [openSlot, setOpenSlot] = React.useState(null);
   const [iterations, setIterations] = React.useState(20000);
   const [result, setResult] = React.useState(null);
+  const [outs, setOuts] = React.useState(null);
   const [isCalculating, setIsCalculating] = React.useState(false);
   const [error, setError] = React.useState(null);
 
@@ -146,6 +148,7 @@ export function OddsCalculatorPage() {
     setSelection(emptySelection());
     setOpenSlot(null);
     setResult(null);
+    setOuts(null);
     setError(null);
   }
 
@@ -163,6 +166,7 @@ export function OddsCalculatorPage() {
     });
     setOpenSlot(null);
     setResult(null);
+    setOuts(null);
     setError(null);
   }
 
@@ -186,10 +190,17 @@ export function OddsCalculatorPage() {
 
     setIsCalculating(true);
     setResult(null);
+    setOuts(null);
 
     try {
       const response = await calculateEquity({ players: selection.players, board, iterations });
       setResult(response);
+      // Outs are only a well-defined heads-up concept with a board still in
+      // motion (see outs.js) -- exact and cheap enough to compute right here,
+      // no server round trip needed.
+      if (selection.players.length === 2 && (board.length === 3 || board.length === 4)) {
+        setOuts(calculateOuts({ players: selection.players, board }));
+      }
       await history.refresh();
     } catch (err) {
       setError({ message: err.message, details: err.details });
@@ -305,7 +316,7 @@ export function OddsCalculatorPage() {
         )
       ),
 
-      e(EquityResult, { result, isLoading: isCalculating, error })
+      e(EquityResult, { result, outs, isLoading: isCalculating, error })
     ),
 
     e(HistoryPanel, {

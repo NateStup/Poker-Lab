@@ -26,6 +26,7 @@ describe('DataStore', () => {
     await assert.rejects(() => store.init(), /must implement init/);
     await assert.rejects(() => store.insert({}), /must implement insert/);
     await assert.rejects(() => store.list(), /must implement list/);
+    await assert.rejects(() => store.update('id', record => record), /must implement update/);
   });
 });
 
@@ -82,6 +83,22 @@ describe('JsonFileStore', () => {
 
     assert.equal(page.total, 1);
     assert.equal(page.items[0].label, 'sim');
+  });
+
+  it('updates a record via an updater function', async () => {
+    const inserted = await store.insert({ type: 'equity', label: 'mutable', count: 1 });
+
+    const updated = await store.update(inserted.id, current => ({ count: current.count + 1 }));
+
+    assert.equal(updated.count, 2);
+    assert.equal(updated.id, inserted.id);
+    assert.equal(updated.createdAt, inserted.createdAt, 'update must not touch createdAt');
+    assert.ok(updated.updatedAt, 'expected an updatedAt timestamp');
+    assert.equal((await store.findById(inserted.id)).count, 2, 'the change must be persisted in memory');
+  });
+
+  it('returns null when updating an id that does not exist', async () => {
+    assert.equal(await store.update('does-not-exist', record => record), null);
   });
 
   it('finds and removes by id', async () => {

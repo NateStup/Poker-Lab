@@ -128,6 +128,37 @@ export class JsonFileStore extends DataStore {
   }
 
   /**
+   * Read-modify-write a single record. The read, the call to `updater`, and
+   * the write into `this.records` all happen synchronously in one tick (only
+   * `flush()` afterwards is async), so there's no window for a concurrent
+   * `update()` on the same id to interleave and lose a write.
+   *
+   * @param {string} id
+   * @param {(current: object) => object} updater receives the current record,
+   *   returns the fields to merge over it
+   * @returns {Promise<object|null>} the updated record, or `null` if `id` doesn't exist
+   */
+  async update(id, updater) {
+    await this.init();
+
+    const index = this.records.findIndex(record => record.id === id);
+    if (index === -1) return null;
+
+    const current = this.records[index];
+    const updated = {
+      ...current,
+      ...updater(current),
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.records[index] = updated;
+    await this.flush();
+    return updated;
+  }
+
+  /**
    * Read records, newest first.
    * @param {object} [query]
    * @param {number} [query.limit=50]
