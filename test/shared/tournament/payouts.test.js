@@ -8,13 +8,18 @@ import { describe, it } from 'node:test';
 import { calculatePayouts, suggestPaidPlaces, suggestPayoutSplit } from '../../../src/shared/tournament/payouts.js';
 
 describe('suggestPaidPlaces', () => {
-  it('pays only first place in a tiny field', () => {
+  it('pays only first place in a heads-up or tiny field', () => {
     assert.equal(suggestPaidPlaces(1), 1);
-    assert.equal(suggestPaidPlaces(4), 1);
+    assert.equal(suggestPaidPlaces(2), 1);
   });
 
-  it('pays roughly the top 12.5% of a larger field', () => {
-    assert.equal(suggestPaidPlaces(24), 3);
+  it('pays multiple places well before a dozen entrants', () => {
+    assert.equal(suggestPaidPlaces(4), 2);
+    assert.equal(suggestPaidPlaces(8), 3);
+  });
+
+  it('pays roughly the top fifth to top quarter of a larger field', () => {
+    assert.equal(suggestPaidPlaces(24), 6);
     assert.equal(suggestPaidPlaces(48), 6);
   });
 

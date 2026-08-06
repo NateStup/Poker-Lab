@@ -24,18 +24,41 @@ const DEFAULT_SPLITS = Object.freeze({
   6: [30, 22, 16, 13, 10.5, 8.5]
 });
 
-const MAX_SUGGESTED_PLACES = Object.keys(DEFAULT_SPLITS).length;
+export const MAX_SUGGESTED_PLACES = Object.keys(DEFAULT_SPLITS).length;
 
 /**
- * Suggest how many places to pay for a given field size -- roughly the top
- * 12.5%, at least one, capped at the largest split this module has a
- * suggestion for.
+ * Field-size breakpoints for how many places to pay. Each entry is the
+ * largest field size that place count still applies to; entryCount above
+ * the last breakpoint pays `MAX_SUGGESTED_PLACES`.
+ *
+ * A continuous "top 12.5%" formula (the previous approach) doesn't cross
+ * the rounding threshold to suggest a 2nd place until the field reaches
+ * about a dozen entrants -- a bad default for the home-game sizes this app
+ * is actually used for, where a small sit-and-go should already pay 2nd
+ * (and 3rd once the field clears single digits), not default to
+ * winner-take-all. Tuned to pay roughly the top fifth to top quarter of the
+ * field rather than derived from anything more rigorous.
+ * @type {ReadonlyArray<[number, number]>}
+ */
+const PAID_PLACES_BREAKPOINTS = Object.freeze([
+  [2, 1],
+  [5, 2],
+  [9, 3],
+  [15, 4],
+  [23, 5]
+]);
+
+/**
+ * Suggest how many places to pay for a given field size.
  * @param {number} entryCount
  * @returns {number}
  */
 export function suggestPaidPlaces(entryCount) {
   if (entryCount <= 1) return 1;
-  return Math.min(Math.max(1, Math.round(entryCount * 0.125)), MAX_SUGGESTED_PLACES);
+  for (const [maxEntries, places] of PAID_PLACES_BREAKPOINTS) {
+    if (entryCount <= maxEntries) return places;
+  }
+  return MAX_SUGGESTED_PLACES;
 }
 
 /**

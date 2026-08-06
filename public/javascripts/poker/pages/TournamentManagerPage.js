@@ -18,7 +18,7 @@
  * than silently skipping levels.
  */
 
-import { computeClockState, generateBlindStructure } from '/shared/tournament/index.js';
+import { computeClockState, generateBlindStructure, suggestPayoutSplit } from '/shared/tournament/index.js';
 import { TournamentClock } from '../components/TournamentClock.js';
 import { TournamentPayouts } from '../components/TournamentPayouts.js';
 import { TournamentRoster } from '../components/TournamentRoster.js';
@@ -29,8 +29,10 @@ import {
   fetchTournaments,
   registerTournamentPlayer,
   removeTournamentPlayer,
+  resetTournament,
   updateTournamentClock,
-  updateTournamentPlayer
+  updateTournamentPlayer,
+  updateTournamentSettings
 } from '../services/apiClient.js';
 
 const e = React.createElement;
@@ -353,6 +355,13 @@ export function TournamentManagerPage() {
         'div',
         { className: 'form-actions' },
         e('button', { type: 'button', className: 'ghost-button', onClick: backToList }, 'Back to list'),
+        tournament.status !== 'setup'
+          ? e('button', {
+              type: 'button',
+              className: 'ghost-button',
+              onClick: () => withErrorHandling(() => resetTournament(tournament.id))
+            }, 'Reset')
+          : null,
         e('button', { type: 'button', className: 'ghost-button danger', onClick: handleDeleteOpen }, 'Delete')
       )
     ),
@@ -395,7 +404,11 @@ export function TournamentManagerPage() {
         e(TournamentPayouts, {
           prizePool: tournament.derived.prizePool,
           payouts: tournament.derived.payouts,
-          players: tournament.players
+          players: tournament.players,
+          isEditable: tournament.status === 'setup',
+          onChangePlaces: places => withErrorHandling(() => updateTournamentSettings(tournament.id, {
+            payoutSplit: suggestPayoutSplit(places)
+          }))
         })
       )
     ),

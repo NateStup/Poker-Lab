@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { suggestPaidPlaces, suggestPayoutSplit } from '../../shared/tournament/payouts.js';
 
 /** @returns {{currentLevelIndex: number, status: 'paused'|'running', levelStartedAt: number|null, pausedElapsedMs: number}} */
 function emptyClock() {
@@ -26,6 +27,21 @@ function mapPlayer(players, playerId, fn) {
   return players.map(player => (player.id === playerId ? fn(player) : player));
 }
 
+/**
+ * The payout split suggested at tournament creation is a guess made with
+ * zero players registered (`suggestPaidPlaces(0)` is always winner-take-all).
+ * As long as the organizer hasn't explicitly chosen a split, keep it in sync
+ * with the field size so it doesn't stay locked at 100% to first once real
+ * entrants show up.
+ * @param {object} current the tournament record before this player change
+ * @param {object[]} players the players array after this player change
+ * @returns {{payoutSplit: number[]}|{}}
+ */
+function suggestedPayoutPatch(current, players) {
+  if (current.payoutSplitCustomized) return {};
+  return { payoutSplit: suggestPayoutSplit(suggestPaidPlaces(players.length)) };
+}
+
 export class TournamentRepository {
   /** @param {import('./DataStore.js').DataStore} store */
   constructor(store) {
@@ -40,11 +56,14 @@ export class TournamentRepository {
 
   /**
    * @param {object} settings validated tournament settings (see
-   *   `validateCreateTournamentRequest`)
+   *   `validateCreateTournamentRequest`), plus an optional
+   *   `payoutSplitCustomized` flag (defaults to `false` -- see
+   *   `suggestedPayoutPatch`)
    * @returns {Promise<object>} the stored tournament
    */
   async create(settings) {
     return this.store.insert({
+      payoutSplitCustomized: false,
       ...settings,
       status: 'setup',
       players: [],
@@ -88,8 +107,8 @@ export class TournamentRepository {
    * @returns {Promise<object|null>}
    */
   async registerPlayer(id, name) {
-    return this.store.update(id, current => ({
-      players: [
+    return this.store.update(id, current => {
+      const players = [
         ...current.players,
         {
           id: randomUUID(),
@@ -101,8 +120,9 @@ export class TournamentRepository {
           place: null,
           registeredAt: new Date().toISOString()
         }
-      ]
-    }));
+      ];
+      return { players, ...suggestedPayoutPatch(current, players) };
+    });
   }
 
   /**
@@ -111,9 +131,10 @@ export class TournamentRepository {
    * @returns {Promise<object|null>}
    */
   async removePlayer(id, playerId) {
-    return this.store.update(id, current => ({
-      players: current.players.filter(player => player.id !== playerId)
-    }));
+    return this.store.update(id, current => {
+      const players = current.players.filter(player => player.id !== playerId);
+      return { players, ...suggestedPayoutPatch(current, players) };
+    });
   }
 
   /** @param {string} id @param {string} playerId @returns {Promise<object|null>} */
@@ -175,6 +196,30 @@ export class TournamentRepository {
       status: current.status === 'completed' ? 'active' : current.status,
       players: mapPlayer(current.players, playerId, player => ({
         ...player,
+        eliminated: false,
+        eliminatedAt: null,
+        place: null
+      }))
+    }));
+  }
+
+  /**
+   * Reset a tournament back to `setup`: clock to level 0, every player's
+   * eliminations/rebuys/add-ons cleared -- but the roster itself kept, since
+   * "run the same event again with the same players" is the point, not
+   * "start over from an empty room". Settings (stacks, blinds, payout split)
+   * are untouched. Works from any status, including `setup` itself.
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async resetProgress(id) {
+    return this.store.update(id, current => ({
+      status: 'setup',
+      clock: emptyClock(),
+      players: current.players.map(player => ({
+        ...player,
+        rebuys: 0,
+        addOns: 0,
         eliminated: false,
         eliminatedAt: null,
         place: null

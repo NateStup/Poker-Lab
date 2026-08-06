@@ -46,6 +46,15 @@ export function createTournamentRouter({ tournamentService }) {
     res.status(204).end();
   }));
 
+  /**
+   * POST /api/tournaments/:id/reset
+   * Returns the tournament to `setup` -- clock to level 0, every player's
+   * eliminations/rebuys/add-ons cleared, roster kept.
+   */
+  router.post('/:id/reset', asyncHandler(async (req, res) => {
+    res.json(await tournamentService.reset(req.params.id));
+  }));
+
   router.post('/:id/players', asyncHandler(async (req, res) => {
     res.status(201).json(await tournamentService.registerPlayer(req.params.id, req.body || {}));
   }));

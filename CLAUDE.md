@@ -228,6 +228,28 @@ for the common case.
 `calculatePayouts` (`payouts.js`) rounds each place independently and folds
 the entire rounding remainder into first place, so payouts always sum to
 exactly the prize pool and only one place's number is ever adjusted for it.
+`suggestPaidPlaces` maps field size to place count off a fixed breakpoint
+table tuned for home-game sizes (2 pays 1, 5 pays 2, 9 pays 3, ...) rather
+than a continuous formula — a "top 12.5%" curve doesn't cross the rounding
+threshold to suggest a 2nd place until the field reaches about a dozen
+entrants, which is a bad default for the small fields this app targets.
+
+A tournament's `payoutSplit` tracks the field size automatically —
+`TournamentRepository.registerPlayer`/`removePlayer` recompute it via
+`suggestPaidPlaces`/`suggestPayoutSplit` on every roster change — until the
+organizer explicitly sets one (via `PATCH .../:id` or the paid-places
+stepper in `TournamentPayouts`), which flips the persisted
+`payoutSplitCustomized` flag and stops the auto-adjustment for good. Without
+that flag, a split chosen before the roster filled out would otherwise get
+silently overwritten by the next registration.
+
+`TournamentRepository.resetProgress` (`POST /api/tournaments/:id/reset`)
+returns a tournament to `setup` — clock to level 0, every player's
+eliminations/rebuys/add-ons cleared — while keeping the roster and settings
+(including a customized payout split) untouched. This is "run the same
+event again with the same players," not "start over from an empty room";
+it works from any status, and afterwards the existing `start` clock action
+serves as the restart.
 
 ## Data store
 
@@ -310,7 +332,12 @@ variable-length array built by pushing cards in pick order — that's what lets
 each position be independently addressable instead of the whole hand sharing
 one shared picker underneath it. Only one popover is open at a time, tracked
 as a single `openSlot` id at the page level; opening a new one implicitly
-closes whatever was open.
+closes whatever was open. The popover is `position: absolute` and doesn't
+reserve layout space, so an open picker renders a full-viewport
+`.card-picker-backdrop` behind it (dismissable by click, same as the
+existing outside-click handler) — without it, a picker taller than the room
+below its slot visually overlapped nearby buttons and text instead of
+reading as a layer on top of them.
 
 **The tournament clock's tick vs. sync split.** `TournamentManagerPage` does
 not poll once a second to animate the countdown — it re-renders once a
@@ -341,6 +368,7 @@ waits at `0:00` rather than silently skipping levels in the background.
 | `GET` | `/api/tournaments/:id` | Full record, decorated with `derived` (clock, stats, payouts) |
 | `PATCH` | `/api/tournaments/:id` | Update settings; only while `status === 'setup'` |
 | `DELETE` | `/api/tournaments/:id` | Delete a tournament |
+| `POST` | `/api/tournaments/:id/reset` | Reset to `setup`: clock to level 0, player progress cleared, roster and settings kept |
 | `POST` | `/api/tournaments/:id/players` | Register a player |
 | `DELETE` | `/api/tournaments/:id/players/:playerId` | Remove a registration; only while `status === 'setup'` |
 | `PATCH` | `/api/tournaments/:id/players/:playerId` | `{action: 'rebuy'\|'addon'\|'eliminate'\|'reinstate'}` |

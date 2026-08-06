@@ -39,7 +39,12 @@ export class TournamentService {
     const { valid, errors, value } = validateCreateTournamentRequest(payload);
     if (!valid) throw ApiError.badRequest('The tournament settings are invalid.', errors);
 
-    return this.#decorate(await this.repository.create(value));
+    // A `payoutSplit` supplied at creation is a deliberate choice; one
+    // defaulted by validation (no players registered yet) is not -- the
+    // repository keeps auto-suggesting a split off the field size as players
+    // register until the organizer explicitly sets one themselves.
+    const payoutSplitCustomized = payload.payoutSplit !== undefined;
+    return this.#decorate(await this.repository.create({ ...value, payoutSplitCustomized }));
   }
 
   /**
@@ -70,7 +75,8 @@ export class TournamentService {
     const { valid, errors, value } = validateCreateTournamentRequest({ ...tournament, ...payload });
     if (!valid) throw ApiError.badRequest('The tournament settings are invalid.', errors);
 
-    return this.#decorate(await this.repository.updateSettings(id, value));
+    const payoutSplitCustomized = tournament.payoutSplitCustomized || payload.payoutSplit !== undefined;
+    return this.#decorate(await this.repository.updateSettings(id, { ...value, payoutSplitCustomized }));
   }
 
   /** @param {string} id @returns {Promise<boolean>} */
@@ -173,6 +179,18 @@ export class TournamentService {
       throw ApiError.badRequest('`levelIndex` must be a non-negative integer.');
     }
     return this.#decorate(await this.repository.setLevel(id, index));
+  }
+
+  /**
+   * Reset a tournament back to `setup` -- clock to level 0, every player's
+   * eliminations/rebuys/add-ons cleared, roster kept. Works regardless of
+   * the tournament's current status.
+   * @param {string} id
+   * @returns {Promise<object>}
+   */
+  async reset(id) {
+    await this.#require(id);
+    return this.#decorate(await this.repository.resetProgress(id));
   }
 
   /**

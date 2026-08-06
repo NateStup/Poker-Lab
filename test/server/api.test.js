@@ -397,6 +397,77 @@ describe('/api/tournaments', () => {
     assert.equal(status, 204);
     assert.equal((await api(`/api/tournaments/${created.body.id}`)).status, 404);
   });
+
+  it('suggests a wider payout split than winner-take-all once the field grows', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Payout suggestion test' }) });
+    assert.deepEqual(created.body.payoutSplit, [100], 'no players yet: nothing to suggest but first place');
+
+    const id = created.body.id;
+    let last;
+    for (const name of ['A', 'B', 'C', 'D']) {
+      last = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name }) });
+    }
+    assert.ok(last.body.payoutSplit.length > 1, 'a 4-player field should not default to winner-take-all');
+    assert.equal(last.body.derived.payouts.length, last.body.payoutSplit.length);
+  });
+
+  it('keeps an organizer-chosen payout split fixed as players register', async () => {
+    const created = await api('/api/tournaments', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Custom payout test', payoutSplit: [100] })
+    });
+
+    const id = created.body.id;
+    let last;
+    for (const name of ['A', 'B', 'C', 'D']) {
+      last = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name }) });
+    }
+    assert.deepEqual(last.body.payoutSplit, [100], 'an explicit choice at creation must not be overridden later');
+  });
+
+  it('lets the organizer override the payout split via settings while still in setup', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Override test' }) });
+    const updated = await api(`/api/tournaments/${created.body.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ payoutSplit: [70, 30] })
+    });
+    assert.deepEqual(updated.body.payoutSplit, [70, 30]);
+
+    await api(`/api/tournaments/${created.body.id}/players`, { method: 'POST', body: JSON.stringify({ name: 'A' }) });
+    const afterRegister = await api(`/api/tournaments/${created.body.id}`);
+    assert.deepEqual(afterRegister.body.payoutSplit, [70, 30], 'the override must survive a later registration');
+  });
+
+  it('resets a tournament to setup, clearing progress but keeping the roster', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Reset test' }) });
+    const id = created.body.id;
+
+    const p1 = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Alice' }) });
+    await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Bob' }) });
+    const alicePlayerId = p1.body.players[0].id;
+
+    await api(`/api/tournaments/${id}/players/${alicePlayerId}`, { method: 'PATCH', body: JSON.stringify({ action: 'rebuy' }) });
+    await api(`/api/tournaments/${id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) });
+    await api(`/api/tournaments/${id}/players/${alicePlayerId}`, { method: 'PATCH', body: JSON.stringify({ action: 'eliminate' }) });
+
+    const { status, body } = await api(`/api/tournaments/${id}/reset`, { method: 'POST' });
+    assert.equal(status, 200);
+    assert.equal(body.status, 'setup');
+    assert.equal(body.clock.currentLevelIndex, 0);
+    assert.equal(body.clock.status, 'paused');
+    assert.equal(body.players.length, 2, 'the roster is kept');
+    assert.ok(body.players.every(p => !p.eliminated && p.rebuys === 0 && p.place === null));
+
+    // A reset tournament is back in `setup`, so the clock can be started again.
+    const restarted = await api(`/api/tournaments/${id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) });
+    assert.equal(restarted.status, 200);
+    assert.equal(restarted.body.status, 'active');
+  });
+
+  it('404s resetting an unknown tournament', async () => {
+    const { status } = await api('/api/tournaments/not-a-real-id/reset', { method: 'POST' });
+    assert.equal(status, 404);
+  });
 });
 
 describe('routing', () => {

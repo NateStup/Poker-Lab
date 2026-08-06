@@ -155,6 +155,16 @@ export function deleteTournament(id) {
 }
 
 /**
+ * Reset a tournament back to `setup` -- clock to level 0, every player's
+ * eliminations/rebuys/add-ons cleared, roster kept.
+ * @param {string} id
+ * @returns {Promise<object>}
+ */
+export function resetTournament(id) {
+  return request(`/api/tournaments/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+}
+
+/**
  * Register a player.
  * @param {string} id
  * @param {string} name

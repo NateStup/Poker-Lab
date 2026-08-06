@@ -11,6 +11,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { generateBlindStructure } from '../../src/shared/tournament/blindStructure.js';
+import { suggestPaidPlaces, suggestPayoutSplit } from '../../src/shared/tournament/payouts.js';
 import { JsonFileStore } from '../../src/server/store/JsonFileStore.js';
 import { TournamentRepository } from '../../src/server/store/TournamentRepository.js';
 
@@ -162,5 +163,68 @@ describe('TournamentRepository', () => {
     let tournament = await repository.create(baseSettings());
     tournament = await repository.setLevel(tournament.id, 2);
     assert.equal(tournament.clock.currentLevelIndex, 2);
+  });
+
+  describe('payout split auto-suggestion', () => {
+    it('recomputes the suggested split as players register, when not customized', async () => {
+      // create() defaults payoutSplitCustomized to false unless the caller
+      // (TournamentService, not tested here) says otherwise, so an explicit
+      // payoutSplit at creation still gets overwritten by the field-size
+      // suggestion once real entrants show up.
+      let tournament = await repository.create(baseSettings());
+      tournament = await repository.registerPlayer(tournament.id, 'P1');
+      assert.deepEqual(tournament.payoutSplit, suggestPayoutSplit(suggestPaidPlaces(1)));
+
+      tournament = await repository.registerPlayer(tournament.id, 'P2');
+      tournament = await repository.registerPlayer(tournament.id, 'P3');
+      tournament = await repository.registerPlayer(tournament.id, 'P4');
+      assert.deepEqual(tournament.payoutSplit, suggestPayoutSplit(suggestPaidPlaces(4)));
+      assert.ok(tournament.payoutSplit.length > 1, 'a 4-player field should pay more than just first place');
+
+      const removed = await repository.removePlayer(tournament.id, tournament.players[0].id);
+      assert.deepEqual(removed.payoutSplit, suggestPayoutSplit(suggestPaidPlaces(3)), 'shrinking the field re-suggests too');
+    });
+
+    it('stops auto-adjusting once payoutSplitCustomized is set', async () => {
+      let tournament = await repository.create({ ...baseSettings(), payoutSplitCustomized: true });
+      tournament = await repository.registerPlayer(tournament.id, 'P1');
+      tournament = await repository.registerPlayer(tournament.id, 'P2');
+      assert.deepEqual(tournament.payoutSplit, [50, 30, 20], 'a customized split must survive registration');
+    });
+  });
+
+  describe('resetProgress', () => {
+    it('returns to setup, clearing the clock and every player\'s progress, keeping the roster', async () => {
+      let tournament = await repository.create(baseSettings());
+      tournament = await repository.registerPlayer(tournament.id, 'A');
+      tournament = await repository.registerPlayer(tournament.id, 'B');
+      const [a, b] = tournament.players;
+
+      tournament = await repository.startClock(tournament.id);
+      tournament = await repository.advanceLevel(tournament.id);
+      tournament = await repository.recordRebuy(tournament.id, a.id);
+      tournament = await repository.recordAddOn(tournament.id, a.id);
+      tournament = await repository.eliminatePlayer(tournament.id, b.id);
+      assert.equal(tournament.status, 'completed', 'one player remaining decides the tournament');
+
+      tournament = await repository.resetProgress(tournament.id);
+
+      assert.equal(tournament.status, 'setup');
+      assert.deepEqual(tournament.clock, { currentLevelIndex: 0, status: 'paused', levelStartedAt: null, pausedElapsedMs: 0 });
+      assert.equal(tournament.players.length, 2, 'the roster itself is kept');
+      for (const player of tournament.players) {
+        assert.equal(player.rebuys, 0);
+        assert.equal(player.addOns, 0);
+        assert.equal(player.eliminated, false);
+        assert.equal(player.eliminatedAt, null);
+        assert.equal(player.place, null);
+      }
+    });
+
+    it('leaves settings, including a customized payout split, untouched', async () => {
+      let tournament = await repository.create({ ...baseSettings(), payoutSplitCustomized: true });
+      tournament = await repository.resetProgress(tournament.id);
+      assert.deepEqual(tournament.payoutSplit, [50, 30, 20]);
+    });
   });
 });
