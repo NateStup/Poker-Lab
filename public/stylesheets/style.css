@@ -538,6 +538,17 @@ button:disabled {
   border: 1px solid rgba(245, 158, 11, 0.22);
 }
 
+/* The picker is tall enough (13x4 cards) to reach past nearby buttons and
+   footnotes when a slot low in the form is opened -- position: absolute
+   alone doesn't reserve that space, so without a backdrop the popover reads
+   as overlapping text rather than a layer on top of it. */
+.card-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+  z-index: 29;
+}
+
 .card-picker-popover {
   position: absolute;
   top: calc(100% + 0.4rem);
@@ -1203,6 +1214,19 @@ button:disabled {
 }
 
 /* Payouts */
+
+.tournament-payout-places {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.tournament-payout-places .ghost-button {
+  min-width: 1.9rem;
+  padding: 0.2rem 0;
+  text-align: center;
+}
 
 .tournament-payout-list {
   list-style: none;

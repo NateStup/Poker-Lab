@@ -56,16 +56,24 @@ export function CardSlot({ card, usedCards, isOpen, onToggleOpen, onClose, onPic
     ),
     isOpen
       ? e(
-          'div',
-          { className: 'card-picker-popover' },
-          e(CardPicker, {
-            currentCard: card || null,
-            usedCards,
-            onPick: picked => {
-              onPick(picked);
-              onClose();
-            }
-          })
+          React.Fragment,
+          null,
+          // The picker can be taller than the room below its slot, so a
+          // backdrop makes it read as a layer on top of the rest of the
+          // form instead of overlapping nearby buttons and text.
+          e('div', { className: 'card-picker-backdrop', 'aria-hidden': 'true', onClick: onClose }),
+          e(
+            'div',
+            { className: 'card-picker-popover' },
+            e(CardPicker, {
+              currentCard: card || null,
+              usedCards,
+              onPick: picked => {
+                onPick(picked);
+                onClose();
+              }
+            })
+          )
         )
       : null
   );
