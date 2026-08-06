@@ -10,9 +10,11 @@
  */
 
 /**
- * Default percentage splits by number of paid places. Common home-game/small
- * MTT conventions -- not derived from anything more rigorous than "this is
- * what most payout calculators default to."
+ * Hand-written percentage splits for the small place counts, where published
+ * structures agree closely and a generated curve reads slightly wrong. Above
+ * `MAX_TABULATED_PLACES` the split is generated instead -- writing out a
+ * 75-place table by hand would be absurd, and nobody agrees on the exact
+ * numbers that far down anyway.
  * @type {Readonly<Record<number, number[]>>}
  */
 const DEFAULT_SPLITS = Object.freeze({
@@ -21,23 +23,44 @@ const DEFAULT_SPLITS = Object.freeze({
   3: [50, 30, 20],
   4: [40, 28, 18, 14],
   5: [35, 24, 17, 13, 11],
-  6: [30, 22, 16, 13, 10.5, 8.5]
+  6: [30, 22, 16, 13, 10.5, 8.5],
+  7: [28, 20, 15, 12, 10, 8, 7],
+  8: [26, 19, 14.5, 11.5, 9.5, 8, 6.5, 5],
+  9: [25, 18, 13.5, 11, 9, 7.5, 6.5, 5.25, 4.25]
 });
 
-export const MAX_SUGGESTED_PLACES = Object.keys(DEFAULT_SPLITS).length;
+/** The largest place count with a hand-written split. */
+export const MAX_TABULATED_PLACES = Object.keys(DEFAULT_SPLITS).length;
+
+/**
+ * The share of the field that cashes once the field outgrows the breakpoint
+ * table. Live and online tournaments settle on roughly the top 15%, and that
+ * convention holds from a few dozen entrants all the way up.
+ */
+const PAID_FIELD_FRACTION = 0.15;
+
+/**
+ * How steeply a generated split falls away from first place.
+ *
+ * Each place's share is proportional to `1 / place^PAYOUT_DECAY`, normalised
+ * to 100. An exponent of 1 (a plain harmonic curve) is a touch too top-heavy
+ * against published structures; 0.9 lands close to them -- 15 paid places
+ * comes out near 27% for first and 2.3% for the min-cash, which is what real
+ * structures of that size actually pay.
+ */
+const PAYOUT_DECAY = 0.9;
 
 /**
  * Field-size breakpoints for how many places to pay. Each entry is the
- * largest field size that place count still applies to; entryCount above
- * the last breakpoint pays `MAX_SUGGESTED_PLACES`.
+ * largest field size that place count still applies to; above the last
+ * breakpoint the `PAID_FIELD_FRACTION` formula takes over, and the table's
+ * last row is positioned so the two meet without a step.
  *
- * A continuous "top 12.5%" formula (the previous approach) doesn't cross
- * the rounding threshold to suggest a 2nd place until the field reaches
- * about a dozen entrants -- a bad default for the home-game sizes this app
- * is actually used for, where a small sit-and-go should already pay 2nd
- * (and 3rd once the field clears single digits), not default to
- * winner-take-all. Tuned to pay roughly the top fifth to top quarter of the
- * field rather than derived from anything more rigorous.
+ * A percentage rule alone is wrong at the small end: "top 15%" doesn't cross
+ * the rounding threshold to pay a 2nd place until the field reaches about a
+ * dozen entrants, which is a bad default for the home games this app targets,
+ * where a sit-and-go should already pay 2nd (and 3rd once the field clears
+ * single digits) rather than winner-take-all.
  * @type {ReadonlyArray<[number, number]>}
  */
 const PAID_PLACES_BREAKPOINTS = Object.freeze([
@@ -45,28 +68,74 @@ const PAID_PLACES_BREAKPOINTS = Object.freeze([
   [5, 2],
   [9, 3],
   [15, 4],
-  [23, 5]
+  [23, 5],
+  [39, 6]
 ]);
 
 /**
  * Suggest how many places to pay for a given field size.
+ *
  * @param {number} entryCount
- * @returns {number}
+ * @returns {number} at least 1, and never more than the field size
  */
 export function suggestPaidPlaces(entryCount) {
-  if (entryCount <= 1) return 1;
+  if (entryCount <= 1) return Math.max(1, entryCount);
+
   for (const [maxEntries, places] of PAID_PLACES_BREAKPOINTS) {
     if (entryCount <= maxEntries) return places;
   }
-  return MAX_SUGGESTED_PLACES;
+
+  return Math.round(entryCount * PAID_FIELD_FRACTION);
 }
 
 /**
+ * The most places it makes sense to let an organizer pay. You cannot pay more
+ * places than you have entrants, and a tournament with nobody registered yet
+ * still needs a usable stepper -- hence the floor.
+ *
+ * @param {number} entryCount
+ * @returns {number}
+ */
+export function maxPaidPlaces(entryCount) {
+  return Math.max(MAX_TABULATED_PLACES, entryCount);
+}
+
+/**
+ * Percentages for a given number of paid places, summing to exactly 100.
+ *
  * @param {number} paidPlaces
  * @returns {number[]} percentages summing to 100, one per place
  */
 export function suggestPayoutSplit(paidPlaces) {
-  return DEFAULT_SPLITS[paidPlaces] || DEFAULT_SPLITS[MAX_SUGGESTED_PLACES];
+  const places = Math.max(1, Math.trunc(paidPlaces));
+  return DEFAULT_SPLITS[places] || generatePayoutSplit(places);
+}
+
+/**
+ * Build a payout curve for a place count too large to tabulate by hand.
+ *
+ * Rounding to two decimals leaves the total a hair off 100, and
+ * `calculatePayouts` refuses a split that doesn't total 100 -- so the drift is
+ * folded into first place, the same one-place-absorbs-the-remainder rule the
+ * payout amounts themselves use.
+ *
+ * That rounding also flattens the deep tail of a large field into tiers of
+ * places paying the same percentage. That is not a defect to smooth out:
+ * published structures do exactly the same thing, because the difference
+ * between 80th and 81st is not worth expressing.
+ *
+ * @param {number} paidPlaces
+ * @returns {number[]}
+ */
+function generatePayoutSplit(paidPlaces) {
+  const weights = Array.from({ length: paidPlaces }, (_unused, index) => 1 / ((index + 1) ** PAYOUT_DECAY));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+
+  const percentages = weights.map(weight => Math.round((weight / totalWeight) * 10000) / 100);
+  const drift = 100 - percentages.reduce((sum, percent) => sum + percent, 0);
+  percentages[0] = Math.round((percentages[0] + drift) * 100) / 100;
+
+  return percentages;
 }
 
 /**

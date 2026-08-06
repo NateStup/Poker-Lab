@@ -11,7 +11,7 @@
  * at creation time, before any players had registered.
  */
 
-import { MAX_SUGGESTED_PLACES } from '/shared/tournament/index.js';
+import { maxPaidPlaces } from '/shared/tournament/index.js';
 
 const e = React.createElement;
 
@@ -31,6 +31,9 @@ function formatMoney(amount) {
 export function TournamentPayouts({ prizePool, payouts, players, isEditable = false, onChangePlaces }) {
   const finisherByPlace = new Map(players.filter(player => player.place != null).map(player => [player.place, player]));
   const paidPlaces = payouts.length;
+  // Bounded by the field, not by a fixed constant: a 60-player tournament
+  // should be able to pay far more than a nine-handed home game.
+  const placesCeiling = maxPaidPlaces(players.length);
 
   return e(
     'div',
@@ -57,7 +60,7 @@ export function TournamentPayouts({ prizePool, payouts, players, isEditable = fa
           e('button', {
             type: 'button',
             className: 'ghost-button',
-            disabled: paidPlaces >= MAX_SUGGESTED_PLACES,
+            disabled: paidPlaces >= placesCeiling,
             'aria-label': 'Pay one more place',
             onClick: () => onChangePlaces(paidPlaces + 1)
           }, '+')

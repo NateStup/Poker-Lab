@@ -228,11 +228,29 @@ for the common case.
 `calculatePayouts` (`payouts.js`) rounds each place independently and folds
 the entire rounding remainder into first place, so payouts always sum to
 exactly the prize pool and only one place's number is ever adjusted for it.
-`suggestPaidPlaces` maps field size to place count off a fixed breakpoint
-table tuned for home-game sizes (2 pays 1, 5 pays 2, 9 pays 3, ...) rather
-than a continuous formula — a "top 12.5%" curve doesn't cross the rounding
-threshold to suggest a 2nd place until the field reaches about a dozen
-entrants, which is a bad default for the small fields this app targets.
+`suggestPaidPlaces` is deliberately two rules joined at a seam. Small fields
+come off a hand-tuned breakpoint table (2 pays 1, 5 pays 2, 9 pays 3, up to
+39 pays 6), because a percentage rule alone doesn't cross the rounding
+threshold to pay a 2nd place until about a dozen entrants — a bad default for
+the home games this app targets. Above the table it pays the standard **top
+15% of the field**, so the suggestion keeps growing with a real field (100
+entrants pay 15, 1000 pay 150) instead of stalling. The table's last row is
+positioned so the two rules meet without a step, and there is a test
+asserting the suggestion never shrinks as the field grows.
+
+`suggestPayoutSplit` hand-writes the curve up to `MAX_TABULATED_PLACES` (9),
+where published structures agree closely, and generates it beyond — each
+place's share proportional to `1 / place^0.9`, normalised to 100. The
+exponent is the one tuning knob: a plain harmonic curve (exponent 1) is a
+shade too top-heavy against real structures, and 0.9 lands on them (15 paid
+places gives first ~27% and a min-cash ~2.3%). Two-decimal rounding flattens
+the deep tail into tiers of places paying the same percentage — that matches
+published structures, and is not a defect to smooth out.
+
+`maxPaidPlaces(entryCount)` is what bounds the UI's paid-places stepper. It
+is the field size, not a constant: you cannot pay more places than you have
+entrants, and the old fixed ceiling of 6 was the reason a large tournament
+could not be given a realistic structure at all.
 
 A tournament's `payoutSplit` tracks the field size automatically —
 `TournamentRepository.registerPlayer`/`removePlayer` recompute it via
