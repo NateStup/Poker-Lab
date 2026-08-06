@@ -510,3 +510,13 @@ Keep this section current — it is how a new session learns what "next" means.
   need to retain it beyond the loop iteration.
 - The equity engine credits split pots fractionally, so every player's equity
   sums to exactly 1. Don't "fix" this to whole-number win counts.
+- **Never nest a `<form>` inside another `<form>`, and give every `<button>`
+  inside a form an explicit `type`.** A button with no `type` defaults to
+  `type="submit"`, and nested forms are invalid HTML with undefined
+  submit-owner behaviour. This has already bitten the hand logger once: the
+  per-street "Add action" button lived in a nested form, so clicking it
+  submitted the outer form natively — a GET to the current URL, which reloads
+  the SPA and dumps the user back on the list page having lost the hand they
+  were building. `HandStreetEditor` is a `div` with `type="button"` for
+  exactly this reason. The symptom to recognise: a click that "goes back to
+  the menu" is almost always an unprevented form submit reloading the page.

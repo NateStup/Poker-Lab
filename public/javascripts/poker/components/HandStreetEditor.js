@@ -44,8 +44,7 @@ export function HandStreetEditor({ street, value, seats, positions, usedCards, o
     onChange({ ...value, board: next });
   }
 
-  function addAction(event) {
-    event.preventDefault();
+  function addAction() {
     const amount = Number(draft.amount);
     if (needsAmount && (!Number.isFinite(amount) || amount <= 0)) return;
 
@@ -94,9 +93,15 @@ export function HandStreetEditor({ street, value, seats, positions, usedCards, o
         : null
     ),
 
+    // A plain div, NOT a form. This editor is rendered inside
+    // `HandBuilderForm`'s <form>, and nested forms are invalid HTML -- the
+    // browser hands a nested submit button to the *outer* form, so an "Add
+    // action" click used to save the whole hand and navigate away. For the
+    // same reason the Add button must stay `type="button"`: any button inside
+    // a form defaults to submitting it.
     e(
-      'form',
-      { className: 'hand-action-form', onSubmit: addAction },
+      'div',
+      { className: 'hand-action-form' },
       e(
         'select',
         {
@@ -123,10 +128,18 @@ export function HandStreetEditor({ street, value, seats, positions, usedCards, o
             placeholder: 'to',
             value: draft.amount,
             onChange: event => setDraft({ ...draft, amount: event.target.value }),
+            // Enter in a lone text input submits the surrounding form, which
+            // here would save the hand instead of adding the action the user
+            // just typed an amount for.
+            onKeyDown: event => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              addAction();
+            },
             'aria-label': 'Total committed on this street'
           })
         : null,
-      e('button', { type: 'submit', className: 'ghost-button' }, 'Add')
+      e('button', { type: 'button', className: 'ghost-button', onClick: addAction }, 'Add')
     ),
 
     value.actions.length > 0
