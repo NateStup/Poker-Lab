@@ -32,6 +32,7 @@ import {
   resetTournament,
   updateTournamentClock,
   updateTournamentPlayer,
+  updateTournamentRegistration,
   updateTournamentSettings
 } from '../services/apiClient.js';
 
@@ -405,7 +406,10 @@ export function TournamentManagerPage() {
           prizePool: tournament.derived.prizePool,
           payouts: tournament.derived.payouts,
           players: tournament.players,
-          isEditable: tournament.status === 'setup',
+          // Editable pre-start (the usual case), or once registration has
+          // closed -- that's what lets the split be finalized against the
+          // field's actual final size instead of only the pre-start guess.
+          isEditable: tournament.status === 'setup' || (!tournament.registrationOpen && tournament.status !== 'completed'),
           onChangePlaces: places => withErrorHandling(() => updateTournamentSettings(tournament.id, {
             payoutSplit: suggestPayoutSplit(places)
           }))
@@ -416,10 +420,30 @@ export function TournamentManagerPage() {
     e(
       'div',
       { className: 'range-panel range-controls' },
-      e('h2', null, 'Players'),
+      e(
+        'div',
+        { className: 'range-panel-head' },
+        e('h2', null, 'Players'),
+        tournament.status !== 'completed'
+          ? e(
+              'div',
+              { className: 'form-actions' },
+              e('span', { className: 'footnote' }, tournament.registrationOpen ? 'Registration open' : 'Registration closed'),
+              e('button', {
+                type: 'button',
+                className: 'ghost-button',
+                onClick: () => withErrorHandling(() => updateTournamentRegistration(
+                  tournament.id,
+                  tournament.registrationOpen ? 'close' : 'reopen'
+                ))
+              }, tournament.registrationOpen ? 'Close registration' : 'Reopen registration')
+            )
+          : null
+      ),
       e(TournamentRoster, {
         players: tournament.players,
         status: tournament.status,
+        registrationOpen: tournament.registrationOpen,
         onRegister: name => withErrorHandling(() => registerTournamentPlayer(tournament.id, name)),
         onPlayerAction: (playerId, action) => withErrorHandling(() => updateTournamentPlayer(tournament.id, playerId, action)),
         onRemove: playerId => withErrorHandling(() => removeTournamentPlayer(tournament.id, playerId))

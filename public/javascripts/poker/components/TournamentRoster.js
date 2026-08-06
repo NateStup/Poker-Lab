@@ -15,11 +15,12 @@ const e = React.createElement;
  * @param {object} props
  * @param {object[]} props.players
  * @param {'setup'|'active'|'completed'} props.status
+ * @param {boolean} props.registrationOpen whether new players can still register
  * @param {(name: string) => void} props.onRegister
  * @param {(playerId: string, action: 'rebuy'|'addon'|'eliminate'|'reinstate') => void} props.onPlayerAction
  * @param {(playerId: string) => void} props.onRemove
  */
-export function TournamentRoster({ players, status, onRegister, onPlayerAction, onRemove }) {
+export function TournamentRoster({ players, status, registrationOpen, onRegister, onPlayerAction, onRemove }) {
   const [name, setName] = React.useState('');
 
   function submitRegistration(event) {
@@ -41,18 +42,20 @@ export function TournamentRoster({ players, status, onRegister, onPlayerAction, 
   return e(
     'div',
     { className: 'tournament-roster' },
-    e(
-      'form',
-      { className: 'tournament-register-form', onSubmit: submitRegistration },
-      e('input', {
-        type: 'text',
-        placeholder: 'Player name',
-        value: name,
-        onChange: event => setName(event.target.value),
-        maxLength: 80
-      }),
-      e('button', { type: 'submit' }, 'Register')
-    ),
+    registrationOpen
+      ? e(
+          'form',
+          { className: 'tournament-register-form', onSubmit: submitRegistration },
+          e('input', {
+            type: 'text',
+            placeholder: 'Player name',
+            value: name,
+            onChange: event => setName(event.target.value),
+            maxLength: 80
+          }),
+          e('button', { type: 'submit' }, 'Register')
+        )
+      : e('p', { className: 'footnote' }, 'Registration is closed -- no new players can be added.'),
     players.length === 0
       ? e('p', { className: 'footnote' }, 'No players registered yet.')
       : e(

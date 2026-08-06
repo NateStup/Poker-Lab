@@ -66,6 +66,7 @@ export class TournamentRepository {
       payoutSplitCustomized: false,
       ...settings,
       status: 'setup',
+      registrationOpen: true,
       players: [],
       clock: emptyClock()
     });
@@ -137,6 +138,28 @@ export class TournamentRepository {
     });
   }
 
+  /**
+   * Stop taking new registrations. Decoupled from the clock: many tournaments
+   * run a late-registration window after the clock has already started, so
+   * this can't just be inferred from `status`. Closing is also what unlocks
+   * finalizing the payout split for the field's actual final size -- see
+   * `TournamentService#updateSettings`.
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async closeRegistration(id) {
+    return this.store.update(id, () => ({ registrationOpen: false }));
+  }
+
+  /**
+   * Reopen registration -- for the inevitable "closed it too early" misclick.
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async openRegistration(id) {
+    return this.store.update(id, () => ({ registrationOpen: true }));
+  }
+
   /** @param {string} id @param {string} playerId @returns {Promise<object|null>} */
   async recordRebuy(id, playerId) {
     return this.store.update(id, current => ({
@@ -175,8 +198,12 @@ export class TournamentRepository {
 
       const stillActive = players.filter(player => !player.eliminated);
       if (stillActive.length === 1) {
+        // A finished tournament has already paid out; registration is force-closed
+        // here (not just left to the organizer) so it can't be reopened by a stale
+        // client racing the completion, then have someone register into a decided event.
         return {
           status: 'completed',
+          registrationOpen: false,
           players: mapPlayer(players, stillActive[0].id, player => ({ ...player, place: 1 }))
         };
       }
@@ -207,14 +234,18 @@ export class TournamentRepository {
    * Reset a tournament back to `setup`: clock to level 0, every player's
    * eliminations/rebuys/add-ons cleared -- but the roster itself kept, since
    * "run the same event again with the same players" is the point, not
-   * "start over from an empty room". Settings (stacks, blinds, payout split)
-   * are untouched. Works from any status, including `setup` itself.
+   * "start over from an empty room". Registration reopens along with it
+   * (returning to `setup` is meaningless if new entrants still couldn't
+   * register), though the organizer can close it again immediately if the
+   * replay should use the same fixed field. Settings (stacks, blinds, payout
+   * split) are untouched. Works from any status, including `setup` itself.
    * @param {string} id
    * @returns {Promise<object|null>}
    */
   async resetProgress(id) {
     return this.store.update(id, current => ({
       status: 'setup',
+      registrationOpen: true,
       clock: emptyClock(),
       players: current.players.map(player => ({
         ...player,

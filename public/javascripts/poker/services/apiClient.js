@@ -135,8 +135,9 @@ export function fetchTournament(id) {
 }
 
 /**
- * Update settings (name, stacks, buy-in, blind structure, payout split) --
- * only accepted while the tournament is still in `setup`.
+ * Update settings (name, stacks, buy-in, blind structure, payout split).
+ * Full settings are only accepted while the tournament is still in `setup`;
+ * a payout-split-only patch is also accepted once registration has closed.
  * @param {string} id
  * @param {object} patch
  * @returns {Promise<object>}
@@ -199,6 +200,19 @@ export function removeTournamentPlayer(id, playerId) {
  */
 export function updateTournamentPlayer(id, playerId, action) {
   return request(`/api/tournaments/${encodeURIComponent(id)}/players/${encodeURIComponent(playerId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ action })
+  });
+}
+
+/**
+ * Close or reopen registration.
+ * @param {string} id
+ * @param {'close'|'reopen'} action
+ * @returns {Promise<object>}
+ */
+export function updateTournamentRegistration(id, action) {
+  return request(`/api/tournaments/${encodeURIComponent(id)}/registration`, {
     method: 'PATCH',
     body: JSON.stringify({ action })
   });

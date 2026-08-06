@@ -55,6 +55,14 @@ export function createTournamentRouter({ tournamentService }) {
     res.json(await tournamentService.reset(req.params.id));
   }));
 
+  /**
+   * PATCH /api/tournaments/:id/registration
+   * Body: { action: 'close'|'reopen' }
+   */
+  router.patch('/:id/registration', asyncHandler(async (req, res) => {
+    res.json(await tournamentService.updateRegistration(req.params.id, req.body || {}));
+  }));
+
   router.post('/:id/players', asyncHandler(async (req, res) => {
     res.status(201).json(await tournamentService.registerPlayer(req.params.id, req.body || {}));
   }));

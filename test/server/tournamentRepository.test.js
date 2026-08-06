@@ -44,10 +44,11 @@ describe('TournamentRepository', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it('creates a tournament in setup status with an empty roster and a paused clock', async () => {
+  it('creates a tournament in setup status with an empty roster, open registration, and a paused clock', async () => {
     const tournament = await repository.create(baseSettings());
 
     assert.equal(tournament.status, 'setup');
+    assert.equal(tournament.registrationOpen, true);
     assert.deepEqual(tournament.players, []);
     assert.deepEqual(tournament.clock, { currentLevelIndex: 0, status: 'paused', levelStartedAt: null, pausedElapsedMs: 0 });
     assert.ok(tournament.id);
@@ -193,6 +194,30 @@ describe('TournamentRepository', () => {
     });
   });
 
+  describe('registration', () => {
+    it('closes and reopens registration', async () => {
+      let tournament = await repository.create(baseSettings());
+      assert.equal(tournament.registrationOpen, true);
+
+      tournament = await repository.closeRegistration(tournament.id);
+      assert.equal(tournament.registrationOpen, false);
+
+      tournament = await repository.openRegistration(tournament.id);
+      assert.equal(tournament.registrationOpen, true);
+    });
+
+    it('force-closes registration once the tournament auto-completes', async () => {
+      let tournament = await repository.create(baseSettings());
+      tournament = await repository.registerPlayer(tournament.id, 'P1');
+      tournament = await repository.registerPlayer(tournament.id, 'P2');
+      const [p1] = tournament.players;
+
+      tournament = await repository.eliminatePlayer(tournament.id, p1.id);
+      assert.equal(tournament.status, 'completed');
+      assert.equal(tournament.registrationOpen, false, 'a decided tournament must not accept new entrants');
+    });
+  });
+
   describe('resetProgress', () => {
     it('returns to setup, clearing the clock and every player\'s progress, keeping the roster', async () => {
       let tournament = await repository.create(baseSettings());
@@ -207,9 +232,11 @@ describe('TournamentRepository', () => {
       tournament = await repository.eliminatePlayer(tournament.id, b.id);
       assert.equal(tournament.status, 'completed', 'one player remaining decides the tournament');
 
+      assert.equal(tournament.registrationOpen, false, 'completion force-closed registration');
       tournament = await repository.resetProgress(tournament.id);
 
       assert.equal(tournament.status, 'setup');
+      assert.equal(tournament.registrationOpen, true, 'a reset event can take new registrations again');
       assert.deepEqual(tournament.clock, { currentLevelIndex: 0, status: 'paused', levelStartedAt: null, pausedElapsedMs: 0 });
       assert.equal(tournament.players.length, 2, 'the roster itself is kept');
       for (const player of tournament.players) {

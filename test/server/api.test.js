@@ -468,6 +468,64 @@ describe('/api/tournaments', () => {
     const { status } = await api('/api/tournaments/not-a-real-id/reset', { method: 'POST' });
     assert.equal(status, 404);
   });
+
+  it('closes registration and refuses further player registrations', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Closes registration' }) });
+    const id = created.body.id;
+    assert.equal(created.body.registrationOpen, true);
+
+    const closed = await api(`/api/tournaments/${id}/registration`, { method: 'PATCH', body: JSON.stringify({ action: 'close' }) });
+    assert.equal(closed.status, 200);
+    assert.equal(closed.body.registrationOpen, false);
+
+    const { status, body } = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Late Larry' }) });
+    assert.equal(status, 422);
+    assert.equal(body.error.code, 'UNPROCESSABLE');
+
+    const reopened = await api(`/api/tournaments/${id}/registration`, { method: 'PATCH', body: JSON.stringify({ action: 'reopen' }) });
+    assert.equal(reopened.body.registrationOpen, true);
+    const registered = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'On Time Otto' }) });
+    assert.equal(registered.status, 201);
+  });
+
+  it('force-closes registration once the tournament is decided and refuses to reopen it', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Decided tournament' }) });
+    const id = created.body.id;
+    const p1 = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Alice' }) });
+    await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Bob' }) });
+
+    const eliminated = await api(`/api/tournaments/${id}/players/${p1.body.players[0].id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'eliminate' })
+    });
+    assert.equal(eliminated.body.status, 'completed');
+    assert.equal(eliminated.body.registrationOpen, false, 'a decided tournament auto-closes registration');
+
+    const registerAttempt = await api(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Too Late' }) });
+    assert.equal(registerAttempt.status, 422, 'nobody should be able to register into an already-paid-out tournament');
+
+    const reopenAttempt = await api(`/api/tournaments/${id}/registration`, { method: 'PATCH', body: JSON.stringify({ action: 'reopen' }) });
+    assert.equal(reopenAttempt.status, 422, 'a completed tournament cannot have registration reopened');
+  });
+
+  it('finalizes the payout split by paid-places once registration has closed, even after the clock has started', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Late reg payout test' }) });
+    const id = created.body.id;
+    await api(`/api/tournaments/${id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) });
+
+    // Still open (late registration window): the payout split can't be finalized yet.
+    const tooEarly = await api(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ payoutSplit: [70, 30] }) });
+    assert.equal(tooEarly.status, 422);
+
+    await api(`/api/tournaments/${id}/registration`, { method: 'PATCH', body: JSON.stringify({ action: 'close' }) });
+    const finalized = await api(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ payoutSplit: [70, 30] }) });
+    assert.equal(finalized.status, 200);
+    assert.deepEqual(finalized.body.payoutSplit, [70, 30]);
+
+    // A settings field other than payoutSplit is still off-limits post-start.
+    const renameAttempt = await api(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) });
+    assert.equal(renameAttempt.status, 422);
+  });
 });
 
 describe('routing', () => {

@@ -24,6 +24,7 @@ import { ApiError } from '../errors/ApiError.js';
 
 const PLAYER_ACTIONS = Object.freeze(['rebuy', 'addon', 'eliminate', 'reinstate']);
 const CLOCK_ACTIONS = Object.freeze(['start', 'pause', 'resume', 'advance', 'setLevel']);
+const REGISTRATION_ACTIONS = Object.freeze(['close', 'reopen']);
 
 export class TournamentService {
   /** @param {{tournamentRepository: import('../store/TournamentRepository.js').TournamentRepository}} deps */
@@ -68,8 +69,23 @@ export class TournamentService {
    */
   async updateSettings(id, payload) {
     const tournament = await this.#require(id);
-    if (tournament.status !== 'setup') {
-      throw ApiError.unprocessable('Settings can only be changed before the tournament starts.');
+
+    // Full settings (name, stacks, blinds, an early payout guess) are only safe
+    // to change before the tournament starts. The payout split is the one
+    // exception: it's meant to be *decided* once the field is final, which for
+    // a tournament with late registration can be well after the clock has
+    // started -- so a payout-split-only patch is allowed once registration has
+    // closed, as long as the tournament isn't already decided.
+    const keys = Object.keys(payload);
+    const isPayoutSplitOnly = keys.length === 1 && keys[0] === 'payoutSplit';
+    const canEditFullSettings = tournament.status === 'setup';
+    const canFinalizePayoutSplit = isPayoutSplitOnly && !tournament.registrationOpen && tournament.status !== 'completed';
+
+    if (!canEditFullSettings && !canFinalizePayoutSplit) {
+      throw ApiError.unprocessable(
+        'Settings can only be changed before the tournament starts, except the payout split, ' +
+        'which can also be finalized once registration has closed.'
+      );
     }
 
     const { valid, errors, value } = validateCreateTournamentRequest({ ...tournament, ...payload });
@@ -91,12 +107,47 @@ export class TournamentService {
    * @returns {Promise<object>}
    */
   async registerPlayer(id, payload) {
-    await this.#require(id);
+    const tournament = await this.#require(id);
+    if (!tournament.registrationOpen) {
+      throw ApiError.unprocessable('Registration is closed for this tournament.');
+    }
 
     const { valid, errors, value } = validateRegisterPlayerRequest(payload);
     if (!valid) throw ApiError.badRequest('The player registration is invalid.', errors);
 
     return this.#decorate(await this.repository.registerPlayer(id, value.name));
+  }
+
+  /**
+   * Close or reopen registration. Closing is what lets `updateSettings`
+   * finalize the payout split against the field's actual final size -- see
+   * the comment there.
+   * @param {string} id
+   * @param {{action: string}} payload
+   * @returns {Promise<object>}
+   */
+  async updateRegistration(id, { action } = {}) {
+    const tournament = await this.#require(id);
+
+    if (!REGISTRATION_ACTIONS.includes(action)) {
+      throw ApiError.badRequest(`Unknown registration action: ${JSON.stringify(action)}`, [
+        `action must be one of ${REGISTRATION_ACTIONS.join(', ')}`
+      ]);
+    }
+    if (action === 'close' && !tournament.registrationOpen) {
+      throw ApiError.unprocessable('Registration is already closed.');
+    }
+    if (action === 'reopen' && tournament.registrationOpen) {
+      throw ApiError.unprocessable('Registration is already open.');
+    }
+    if (action === 'reopen' && tournament.status === 'completed') {
+      throw ApiError.unprocessable('Registration cannot be reopened once the tournament is complete.');
+    }
+
+    const updated = action === 'close'
+      ? await this.repository.closeRegistration(id)
+      : await this.repository.openRegistration(id);
+    return this.#decorate(updated);
   }
 
   /**
