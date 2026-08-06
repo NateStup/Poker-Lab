@@ -1289,3 +1289,301 @@ button:disabled {
 .tournament-list-name {
   font-weight: 700;
 }
+
+/* ── Hand Logger ────────────────────────────────────────────────────────── */
+
+/* The table diagram. Seats are absolutely positioned around the felt from
+   trig in `PokerTable.js`, so this block only styles them -- it never decides
+   where they sit. The container needs a fixed aspect so the seats' percentage
+   offsets land on an oval rather than whatever shape the content produced. */
+.poker-table {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  margin: var(--space-md) auto;
+  aspect-ratio: 16 / 10;
+}
+
+.poker-table-felt {
+  position: absolute;
+  inset: 12% 8%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, rgba(22, 101, 52, 0.55), rgba(6, 46, 26, 0.85));
+  border: 2px solid var(--border-slate);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.45), var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.poker-table-board {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 0 var(--space-md);
+}
+
+.poker-table-pot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--color-text-primary);
+}
+
+.poker-table-seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 8.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-slate);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+button.poker-table-seat {
+  cursor: pointer;
+}
+
+button.poker-table-seat:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.poker-table-seat.is-hero {
+  border-color: var(--color-accent);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--color-text-primary);
+}
+
+.poker-table-seat.is-selected {
+  border-color: var(--color-info);
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
+}
+
+.poker-table-seat.is-winner {
+  border-color: var(--color-success);
+}
+
+.poker-table-seat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.poker-table-position {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.poker-table-button-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-primary);
+  color: var(--color-bg-start);
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+
+.poker-table-seat-name {
+  font-weight: 700;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.poker-table-seat-cards {
+  display: flex;
+  gap: 0.2rem;
+  min-height: 1.2rem;
+  align-items: center;
+}
+
+/* Seat editor, revealed under the table when a seat is clicked. */
+.hand-seat-editor {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.hand-seat-editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.hand-hero-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+/* Streets: four editors that sit side by side on a wide screen and stack on
+   a narrow one, so logging on a phone at the table stays usable. */
+.hand-streets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-md);
+  margin: var(--space-lg) 0;
+}
+
+.hand-street,
+.hand-summary-street {
+  padding: var(--space-md);
+  background: var(--surface-2-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.hand-street h3,
+.hand-summary-street h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.hand-action-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0;
+}
+
+.hand-action-form select,
+.hand-action-form input {
+  flex: 1 1 5rem;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.hand-action-list {
+  list-style: none;
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.hand-action-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0.25rem var(--space-xs);
+  background: var(--surface-overlay-soft);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.hand-action-seat {
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  min-width: 3rem;
+}
+
+.hand-action-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hand-action-type {
+  color: var(--color-accent-light);
+}
+
+.hand-action-row .ghost-button {
+  padding: 0 0.35rem;
+  border: none;
+}
+
+.hand-notes {
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border-slate);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.hand-winner-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
+}
+
+/* Read-only summary. */
+.hand-summary-streets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-md);
+  margin: var(--space-lg) 0;
+}
+
+.hand-summary-notes {
+  margin: var(--space-sm) 0 0;
+  padding: var(--space-sm);
+  background: var(--surface-overlay-soft);
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.hand-net-up {
+  color: var(--color-success);
+}
+
+.hand-net-down {
+  color: var(--color-danger);
+}
+
+.hand-list-cards {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin-left: var(--space-sm);
+  vertical-align: middle;
+}
+
+/* Below this width the seats would overlap each other on the felt, so the
+   diagram gets taller rather than wider and the seats shrink to match. */
+@media (max-width: 640px) {
+  .poker-table {
+    aspect-ratio: 3 / 4;
+  }
+
+  .poker-table-seat {
+    width: 6rem;
+    font-size: 0.7rem;
+  }
+}

@@ -107,6 +107,54 @@ export function clearHistory() {
 }
 
 /**
+ * Save a logged hand.
+ * @param {object} payload see `validateHandLogRequest`
+ * @returns {Promise<object>} the saved hand, decorated with `derived`
+ */
+export function createHand(payload) {
+  return request('/api/hands', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+/**
+ * Fetch a page of saved hands, newest first (lightweight summaries only).
+ * @param {{limit?: number, offset?: number}} [query]
+ * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
+ */
+export function fetchHands({ limit = 50, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request(`/api/hands?${params}`);
+}
+
+/**
+ * Fetch one saved hand, decorated with derived pot maths.
+ * @param {string} id
+ * @returns {Promise<object>}
+ */
+export function fetchHand(id) {
+  return request(`/api/hands/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Edit a saved hand. The patch is merged over the stored record server-side,
+ * so a partial edit is safe.
+ * @param {string} id
+ * @param {object} patch
+ * @returns {Promise<object>}
+ */
+export function updateHand(id, patch) {
+  return request(`/api/hands/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+/**
+ * Delete a saved hand.
+ * @param {string} id
+ * @returns {Promise<null>}
+ */
+export function deleteHand(id) {
+  return request(`/api/hands/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/**
  * Create a tournament.
  * @param {object} payload see `validateCreateTournamentRequest`
  * @returns {Promise<object>}

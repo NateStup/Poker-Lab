@@ -17,9 +17,10 @@ import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { createApiRouter } from './routes/index.js';
 import { EquityService } from './services/EquityService.js';
+import { HandLogService } from './services/HandLogService.js';
 import { RangeService } from './services/RangeService.js';
 import { TournamentService } from './services/TournamentService.js';
-import { createHistoryRepository, createTournamentRepository } from './store/index.js';
+import { createHandLogRepository, createHistoryRepository, createTournamentRepository } from './store/index.js';
 
 /**
  * Build a fully wired Express app.
@@ -30,15 +31,19 @@ import { createHistoryRepository, createTournamentRepository } from './store/ind
  *   configured one is created when omitted
  * @param {import('./store/TournamentRepository.js').TournamentRepository} [options.tournamentRepository]
  *   same, for tournaments
- * @returns {Promise<import('express').Express>} the app, with `locals.historyRepository`
- *   and `locals.tournamentRepository` set so callers can close the stores on shutdown
+ * @param {import('./store/HandLogRepository.js').HandLogRepository} [options.handLogRepository]
+ *   same, for saved hands
+ * @returns {Promise<import('express').Express>} the app, with its repositories on
+ *   `locals` so callers can close the stores on shutdown
  */
-export async function createApp({ historyRepository, tournamentRepository } = {}) {
+export async function createApp({ historyRepository, tournamentRepository, handLogRepository } = {}) {
   const repository = historyRepository || await createHistoryRepository();
   const tournamentRepo = tournamentRepository || await createTournamentRepository();
+  const handLogRepo = handLogRepository || await createHandLogRepository();
   const equityService = new EquityService({ historyRepository: repository });
   const rangeService = new RangeService();
   const tournamentService = new TournamentService({ tournamentRepository: tournamentRepo });
+  const handLogService = new HandLogService({ handLogRepository: handLogRepo });
 
   const app = express();
 
@@ -63,7 +68,13 @@ export async function createApp({ historyRepository, tournamentRepository } = {}
 
   app.use(express.static(config.paths.public));
 
-  app.use('/api', createApiRouter({ equityService, rangeService, tournamentService, historyRepository: repository }));
+  app.use('/api', createApiRouter({
+    equityService,
+    rangeService,
+    tournamentService,
+    handLogService,
+    historyRepository: repository
+  }));
 
   // Any non-API path falls through to the single-page app, so client-side
   // routing works on a hard refresh. API 404s are still real 404s.
@@ -76,6 +87,7 @@ export async function createApp({ historyRepository, tournamentRepository } = {}
 
   app.locals.historyRepository = repository;
   app.locals.tournamentRepository = tournamentRepo;
+  app.locals.handLogRepository = handLogRepo;
 
   return app;
 }

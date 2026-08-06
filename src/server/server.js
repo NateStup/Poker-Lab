@@ -42,8 +42,9 @@ server.on('error', error => {
 });
 
 /**
- * Stop accepting connections, then flush the store before exiting. Without the
- * flush, a debounced history write could be lost on Ctrl+C.
+ * Stop accepting connections, then flush every store before exiting. Without
+ * the flush, a debounced write could be lost on Ctrl+C -- and every store is
+ * debounced, so they all have to be closed, not just the first one.
  * @param {string} signal
  */
 async function shutdown(signal) {
@@ -51,10 +52,18 @@ async function shutdown(signal) {
 
   server.close(() => console.log('HTTP server closed.'));
 
-  try {
-    await app.locals.historyRepository?.store?.close();
-  } catch (error) {
-    console.error('Failed to flush the data store:', error.message);
+  const stores = [
+    app.locals.historyRepository,
+    app.locals.tournamentRepository,
+    app.locals.handLogRepository
+  ];
+
+  for (const repository of stores) {
+    try {
+      await repository?.store?.close();
+    } catch (error) {
+      console.error('Failed to flush a data store:', error.message);
+    }
   }
 
   process.exit(0);

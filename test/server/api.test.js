@@ -15,6 +15,8 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { createApp } from '../../src/server/app.js';
+import { createEmptyHand } from '../../src/shared/handLog/index.js';
+import { HandLogRepository } from '../../src/server/store/HandLogRepository.js';
 import { HistoryRepository } from '../../src/server/store/HistoryRepository.js';
 import { JsonFileStore } from '../../src/server/store/JsonFileStore.js';
 import { TournamentRepository } from '../../src/server/store/TournamentRepository.js';
@@ -51,7 +53,12 @@ before(async () => {
   );
   await tournamentRepository.init();
 
-  const app = await createApp({ historyRepository, tournamentRepository });
+  const handLogRepository = new HandLogRepository(
+    new JsonFileStore({ filePath: path.join(tempDir, 'hands.json') })
+  );
+  await handLogRepository.init();
+
+  const app = await createApp({ historyRepository, tournamentRepository, handLogRepository });
   server = http.createServer(app);
 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -525,6 +532,134 @@ describe('/api/tournaments', () => {
     // A settings field other than payoutSplit is still off-limits post-start.
     const renameAttempt = await api(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) });
     assert.equal(renameAttempt.status, 422);
+  });
+});
+
+describe('/api/hands', () => {
+  /** @param {object} [overrides] @returns {object} a saveable hand payload */
+  function handPayload(overrides = {}) {
+    return { ...createEmptyHand({ seatCount: 6 }), name: 'Three-bet pot', ...overrides };
+  }
+
+  it('saves a hand and returns it with derived pot maths', async () => {
+    const { status, body } = await api('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({
+        format: { gameType: 'cash', smallBlind: 1, bigBlind: 2, ante: 0, straddleSeat: null, straddleAmount: 0 },
+        streets: {
+          preflop: {
+            board: [],
+            actions: [{ seatNumber: 3, type: 'raise', amount: 6 }, { seatNumber: 2, type: 'call', amount: 6 }],
+            notes: 'opened from UTG, I defended'
+          },
+          flop: { board: ['As', 'Kd', '7h'], actions: [], notes: 'top pair' },
+          turn: { board: [], actions: [], notes: '' },
+          river: { board: [], actions: [], notes: '' }
+        },
+        result: { winningSeats: [3], notes: 'held up' }
+      }))
+    });
+
+    assert.equal(status, 201);
+    assert.ok(body.id);
+    // SB 1 + BB called to 6 + raiser 6 = 13.
+    assert.equal(body.derived.totalPot, 13);
+    assert.equal(body.derived.potAfterStreet.preflop, 13);
+    assert.equal(body.derived.positions[0], 'BTN');
+    assert.deepEqual(body.derived.payouts, [{ seatNumber: 3, amount: 13 }]);
+    assert.equal(body.derived.furthestStreet, 'flop');
+    assert.equal(body.streets.preflop.notes, 'opened from UTG, I defended');
+  });
+
+  it('rejects a hand with no name', async () => {
+    const { status, body } = await api('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: '' }))
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error.code, 'BAD_REQUEST');
+    assert.ok(body.error.details.some(detail => detail.includes('`name`')));
+  });
+
+  it('rejects a hand whose board reuses a hole card', async () => {
+    const seats = createEmptyHand({ seatCount: 6 }).seats.map((seat, index) =>
+      index === 0 ? { ...seat, cards: ['As', 'Kd'] } : seat);
+
+    const { status, body } = await api('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({
+        seats,
+        streets: {
+          preflop: { board: [], actions: [], notes: '' },
+          flop: { board: ['As', '7c', '2h'], actions: [], notes: '' },
+          turn: { board: [], actions: [], notes: '' },
+          river: { board: [], actions: [], notes: '' }
+        }
+      }))
+    });
+
+    assert.equal(status, 400);
+    assert.ok(body.error.details.some(detail => detail.includes('As')));
+  });
+
+  it('reads a saved hand back by id, which is what a shared link does', async () => {
+    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload({ name: 'Shareable' })) });
+
+    const { status, body } = await api(`/api/hands/${created.body.id}`);
+    assert.equal(status, 200);
+    assert.equal(body.name, 'Shareable');
+    assert.ok(body.derived, 'a cold-loaded hand still ships its derived maths');
+  });
+
+  it('edits a saved hand in place, keeping its id so the link still resolves', async () => {
+    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload({ name: 'Original' })) });
+
+    const { status, body } = await api(`/api/hands/${created.body.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed after the fact' })
+    });
+
+    assert.equal(status, 200);
+    assert.equal(body.id, created.body.id);
+    assert.equal(body.name, 'Renamed after the fact');
+    assert.equal(body.seats.length, 6, 'a partial edit must not drop the rest of the hand');
+  });
+
+  it('rejects an edit that would make the hand invalid', async () => {
+    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
+
+    const { status } = await api(`/api/hands/${created.body.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ buttonSeat: 99 })
+    });
+    assert.equal(status, 400);
+  });
+
+  it('lists saved hands as lightweight summaries, newest first', async () => {
+    const { status, body } = await api('/api/hands?limit=50');
+
+    assert.equal(status, 200);
+    assert.ok(body.items.length > 0);
+    const summary = body.items[0];
+    assert.ok(summary.name);
+    assert.equal(summary.seatCount, 6);
+    assert.ok('totalPot' in summary);
+    assert.ok('heroCards' in summary);
+    assert.equal(summary.seats, undefined, 'the full roster is not shipped to a list view');
+  });
+
+  it('deletes a hand', async () => {
+    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload({ name: 'Deletable' })) });
+
+    const { status } = await api(`/api/hands/${created.body.id}`, { method: 'DELETE' });
+    assert.equal(status, 204);
+    assert.equal((await api(`/api/hands/${created.body.id}`)).status, 404);
+  });
+
+  it('404s for an unknown hand', async () => {
+    const { status, body } = await api('/api/hands/not-a-real-id');
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
   });
 });
 

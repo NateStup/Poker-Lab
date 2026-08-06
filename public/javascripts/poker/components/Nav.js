@@ -10,7 +10,8 @@ const e = React.createElement;
 const NAV_LINKS = Object.freeze([
   { to: '/', label: 'Odds Calculator', matches: path => path === '/' || path === '/equity' || path === '/odds' },
   { to: '/ranges', label: 'Range Explorer', matches: path => path === '/ranges' },
-  { to: '/tournament', label: 'Tournament Manager', matches: path => path === '/tournament' }
+  { to: '/tournament', label: 'Tournament Manager', matches: path => path === '/tournament' },
+  { to: '/hands', label: 'Hand Logger', matches: path => path.startsWith('/hands') }
 ]);
 
 /**

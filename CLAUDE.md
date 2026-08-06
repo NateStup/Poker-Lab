@@ -10,9 +10,11 @@ reasoning matter as much as behaviour.
 
 Shipped: a Texas Hold'em odds calculator with persistent history and exact
 outs, a range explorer (range-vs-hand and range-vs-range equity, range
-notation import/export, a Chen-formula "top X%" slider), and a tournament
-manager (registration, buy-ins/rebuys/add-ons, a blind clock, and payouts).
-Next up: a session tracker (see [Roadmap](#roadmap)).
+notation import/export, a Chen-formula "top X%" slider), a tournament
+manager (registration, buy-ins/rebuys/add-ons, a blind clock, and payouts),
+and a hand logger (recreate a hand on a table diagram, log the betting and
+your thinking street by street, then share it by link).
+Next up: a poker simulator (see [Roadmap](#roadmap)).
 
 ## Commands
 
@@ -62,6 +64,7 @@ gh api --method PUT repos/NateStup/myExpressApp/branches/main/protection \
 src/
   shared/poker/       Pure poker domain logic. Isomorphic — runs in Node AND the browser.
   shared/tournament/  Pure tournament domain logic (blind clock, stats, payouts). Same rules.
+  shared/handLog/     Pure hand-log domain logic (positions, forced bets, pot maths). Same rules.
   server/             Express app: config, routes, services, store, middleware.
 public/               Static frontend. Buildless native ES modules + CDN React.
 test/shared/          Domain tests (test/shared/tournament/ mirrors src/shared/tournament/).
@@ -73,8 +76,8 @@ Request flow: `route → service → domain` on the way in, `→ store` on the w
 
 ### The one rule that shapes everything: shared domain code
 
-`src/shared/` (both `poker/` and `tournament/`) is served to the browser at
-`/shared/` (see the static mount in [src/server/app.js](src/server/app.js)).
+`src/shared/` (`poker/`, `tournament/` and `handLog/`) is served to the browser
+at `/shared/` (see the static mount in [src/server/app.js](src/server/app.js)).
 Server code imports it by relative path; client code imports it as
 `/shared/poker/cards.js` or `/shared/tournament/index.js`. **One
 implementation, two consumers.** The tournament clock is the clearest example
@@ -94,6 +97,10 @@ Consequences to respect:
   `process`, no DOM. It has to parse and run in both runtimes.
 - Randomness comes from an injected `Rng`, never `Math.random()` directly.
 - Server-only concerns (persistence, HTTP, config) live in `src/server/`.
+- One shared module may import another — `handLog/` reads card helpers and the
+  table-size bounds out of `poker/`. That's fine; both are pure, and the
+  alternative is a second `normalizeCard` to keep in sync, which is the exact
+  split this directory exists to prevent.
 
 ### Layer responsibilities
 
@@ -261,6 +268,16 @@ stepper in `TournamentPayouts`), which flips the persisted
 that flag, a split chosen before the roster filled out would otherwise get
 silently overwritten by the next registration.
 
+Registration is its own piece of state (`registrationOpen`), deliberately
+**not** inferred from `status`: real tournaments keep late registration open
+after the clock has started, so "has the tournament begun" and "can people
+still buy in" are different questions. Closing registration is what unlocks
+finalizing the payout split against the field's actual final size — a
+payout-split-only `PATCH` is accepted post-start once registration is
+closed, which is the one exception to the settings-are-setup-only rule.
+Completion force-closes registration (`eliminatePlayer`), so nobody can
+register into an event that has already paid out; `resetProgress` reopens it.
+
 `TournamentRepository.resetProgress` (`POST /api/tournaments/:id/reset`)
 returns a tournament to `setup` — clock to level 0, every player's
 eliminations/rebuys/add-ons cleared — while keeping the roster and settings
@@ -268,6 +285,45 @@ eliminations/rebuys/add-ons cleared — while keeping the roster and settings
 event again with the same players," not "start over from an empty room";
 it works from any status, and afterwards the existing `start` clock action
 serves as the restart.
+
+## Hand-log domain (`src/shared/handLog/`)
+
+A logged hand is a table (`seats`, `buttonSeat`, `format`), four streets
+(each with `board`, `actions`, `notes`), and a stated `result`. It is a
+**logger, not a rules engine** — the line it holds is that impossible
+*data* is rejected while merely odd *poker* is not. A turn dealt before a
+flop, a card used twice, a hand with no hero: rejected. Betting after
+folding, a wild overbet, a call for less than the bet: accepted, because
+someone reconstructing a hand from memory is far likelier than someone
+making a claim about the rules. Deliberately out of scope: min-raise and
+turn-order legality, side pots, and inferring the winner from card
+strength (a real hand is often logged with the opponent's cards unknown,
+so there is frequently nothing to evaluate — the user states the result).
+
+The one convention that makes the pot come out right: **`action.amount` is
+the total that seat has committed on that street once the action is done**
+— "raise to 300", not "put in 300 more". That is how poker is spoken, and
+it makes blinds fall out for free: a big blind calling a raise to 300 logs
+`call 300`, and `computeHandDerived` subtracts the 100 already posted
+rather than double-counting it. An amount *below* what the seat already
+committed is clamped to a zero increment, so a mistyped log can never pull
+chips back out of the pot.
+
+Forced bets are **derived, never logged**: `deriveForcedBets` computes
+antes/blinds/straddle from `format` + `buttonSeat`, so the stored `actions`
+list holds only voluntary decisions. Typing "SB posts 50, BB posts 100, and
+nine antes of 25" is exactly the bookkeeping this feature exists to remove.
+
+`derivePositions` (`positions.js`) is the single source of position labels;
+they are computed from `buttonSeat`, never stored per seat, so an edit to
+the button can't leave stale labels behind. Heads-up is hard-coded as
+`['BTN/SB', 'BB']` in the lookup table rather than derived, because the
+button *is* the small blind 2-handed — the case that breaks any "seat after
+the button" rule.
+
+`splitPot` divides a chop evenly and gives the odd chip to the first
+winning seat, so payouts always sum to exactly the pot — the same
+one-place-absorbs-the-remainder convention as `calculatePayouts`.
 
 ## Data store
 
@@ -326,13 +382,38 @@ route switch) → `pages/` (one component per route, owns that page's state) →
 normalises the server's `{error: {message, details}}` shape into thrown
 `ApiRequestError`s — components only ever handle exceptions.
 
-**Routing.** Three routes (`/` → Odds Calculator, `/ranges` → Range Explorer,
-`/tournament` → Tournament Manager) didn't justify a router dependency, so
-`router.js` is a ~50-line hand-rolled one: a `useRoute()` hook backed by
+**Routing.** Five routes (`/` → Odds Calculator, `/ranges` → Range Explorer,
+`/tournament` → Tournament Manager, `/hands` → Hand Logger, `/hands/:id` →
+one saved hand) still don't justify a router dependency, so `router.js` is a
+~50-line hand-rolled one: a `useRoute()` hook backed by
 `history.pushState`/`popstate`, and a `Link` component that intercepts a
 plain left click. This is what "minimise dependencies" (see Conventions)
 looks like in practice — reach for a library when the hand-written version
 stops being trivial, not before.
+
+`/hands/:id` is the first route carrying a parameter, and it needed no
+router change at all: `useRoute()` already returns the raw pathname, so
+`AppShell.pageFor` does one `startsWith` and slices the id off. It exists
+because a saved hand has to be *linkable* — that's what "share" means here,
+and it's why the Hand Logger splits list and detail across two routes
+instead of switching on state the way the Tournament Manager does.
+
+**The hand logger's table diagram.** `PokerTable` positions seats around an
+oval with trigonometry into `left`/`top` percentages rather than drawing to
+SVG or canvas, so every seat stays a real DOM button — focusable, clickable
+and screen-reader-navigable for free. It renders whatever it's handed and
+reports clicks upward; position labels are passed in (derived once by the
+page) rather than computed inside, so the diagram can't disagree with the
+rest of the page about who is on the button. Seats are edited by clicking
+one on the felt, which reveals an editor for just that seat — ten seats'
+worth of fields never appear at once, and the table stays visible.
+
+Board cards, like every other card position in this app, are **fixed-size
+arrays with `null` holes** while being edited. Closing the gaps as cards are
+picked would slide a card chosen for the third flop slot down into the
+first one the moment it was selected. The nulls are stripped by
+`validateHandLogRequest` on save, which is also what rejects a half-dealt
+street.
 
 **Shared look and feel.** `public/stylesheets/style.css` opens with a `:root`
 block of design tokens (color, spacing, radii, shadows) that every page's
@@ -384,13 +465,19 @@ waits at `0:00` rather than silently skipping levels in the background.
 | `POST` | `/api/tournaments` | Create a tournament |
 | `GET` | `/api/tournaments` | List tournaments (lightweight summaries) |
 | `GET` | `/api/tournaments/:id` | Full record, decorated with `derived` (clock, stats, payouts) |
-| `PATCH` | `/api/tournaments/:id` | Update settings; only while `status === 'setup'` |
+| `PATCH` | `/api/tournaments/:id` | Update settings; only while `status === 'setup'`, except a payout-split-only patch, which is also allowed once registration has closed |
 | `DELETE` | `/api/tournaments/:id` | Delete a tournament |
-| `POST` | `/api/tournaments/:id/reset` | Reset to `setup`: clock to level 0, player progress cleared, roster and settings kept |
-| `POST` | `/api/tournaments/:id/players` | Register a player |
+| `POST` | `/api/tournaments/:id/reset` | Reset to `setup`: clock to level 0, player progress cleared, registration reopened, roster and settings kept |
+| `PATCH` | `/api/tournaments/:id/registration` | `{action: 'close'\|'reopen'}` |
+| `POST` | `/api/tournaments/:id/players` | Register a player; refused once registration is closed |
 | `DELETE` | `/api/tournaments/:id/players/:playerId` | Remove a registration; only while `status === 'setup'` |
 | `PATCH` | `/api/tournaments/:id/players/:playerId` | `{action: 'rebuy'\|'addon'\|'eliminate'\|'reinstate'}` |
 | `PATCH` | `/api/tournaments/:id/clock` | `{action: 'start'\|'pause'\|'resume'\|'advance'\|'setLevel', levelIndex?}` |
+| `POST` | `/api/hands` | Save a logged hand |
+| `GET` | `/api/hands` | List saved hands (lightweight summaries) |
+| `GET` | `/api/hands/:id` | Full record, decorated with `derived` (positions, pot progression, payouts) |
+| `PATCH` | `/api/hands/:id` | Edit a saved hand; merged over the stored record, then validated in full |
+| `DELETE` | `/api/hands/:id` | Delete a saved hand |
 
 Everything under `/api`. Non-API paths fall through to `index.html` so
 client-side routing survives a hard refresh; API 404s stay real 404s.
@@ -404,10 +491,15 @@ Keep this section current — it is how a new session learns what "next" means.
    already in place for it: `Deck`, `Rng`, `findWinners`, and the record-type
    discriminator in `HistoryRepository`.
 2. **Session tracker** — aggregate stored records into trends over time.
+   Saved hands are the obvious second input alongside history records.
 3. **PR process** — GitHub Actions running `npm test`, plus build artifacts.
 4. **Tournament seating/table balancing** — the manager currently tracks
    registration, stacks, the clock, and payouts, but not seat assignments;
    a natural extension once multi-table events are in scope.
+5. **Hand-log extras** — replay the streets one action at a time, run a
+   logged spot through `calculateEquity` to see what the hero's equity
+   actually was, and import from a site's hand-history text format. The
+   structured `streets`/`actions` model was chosen with these in mind.
 
 ## Gotchas
 

@@ -2,12 +2,15 @@
  * Root component: the page shell (header/nav/footer) every page shares, plus
  * the route switch that decides which page renders inside it.
  *
- * Kept deliberately dumb -- three routes, no nesting, no route params --
- * because that is genuinely all this app needs. See `router.js` for why that
- * means no router dependency either.
+ * Still no router dependency -- see `router.js`. The Hand Logger introduced
+ * the first route that carries an id (`/hands/:id`, because a saved hand has
+ * to be linkable), and it needed exactly one `startsWith` here rather than a
+ * matching library.
  */
 
 import { Nav } from './components/Nav.js';
+import { HandDetailPage } from './pages/HandDetailPage.js';
+import { HandLoggerPage } from './pages/HandLoggerPage.js';
 import { OddsCalculatorPage } from './pages/OddsCalculatorPage.js';
 import { RangeExplorerPage } from './pages/RangeExplorerPage.js';
 import { TournamentManagerPage } from './pages/TournamentManagerPage.js';
@@ -17,11 +20,23 @@ const e = React.createElement;
 
 const TITLES = Object.freeze({
   '/ranges': 'Poker Lab · Range Explorer',
-  '/tournament': 'Poker Lab · Tournament Manager'
+  '/tournament': 'Poker Lab · Tournament Manager',
+  '/hands': 'Poker Lab · Hand Logger'
 });
+
+/** The id in `/hands/:id`, or `null` for the index route. */
+const HANDS_PREFIX = '/hands/';
+
+/** @param {string} path @returns {string|null} */
+function handIdFrom(path) {
+  if (!path.startsWith(HANDS_PREFIX)) return null;
+  const id = path.slice(HANDS_PREFIX.length);
+  return id.length > 0 ? decodeURIComponent(id) : null;
+}
 
 /** @param {string} path @returns {string} */
 function titleFor(path) {
+  if (handIdFrom(path)) return 'Poker Lab · Hand';
   return TITLES[path] || 'Poker Lab · Odds Calculator';
 }
 
@@ -29,12 +44,17 @@ function titleFor(path) {
 function pageFor(path) {
   if (path === '/ranges') return e(RangeExplorerPage);
   if (path === '/tournament') return e(TournamentManagerPage);
+
+  const handId = handIdFrom(path);
+  if (handId) return e(HandDetailPage, { id: handId });
+  if (path === '/hands') return e(HandLoggerPage);
+
   return e(OddsCalculatorPage);
 }
 
 export function AppShell() {
   const path = useRoute();
-  const isWide = path === '/ranges' || path === '/tournament';
+  const isWide = path === '/ranges' || path === '/tournament' || path.startsWith('/hands');
 
   React.useEffect(() => {
     document.title = titleFor(path);
