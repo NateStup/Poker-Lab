@@ -13,7 +13,7 @@
  * This module is pure and runs unchanged in Node and the browser.
  */
 
-import { RANK_VALUES, cardSuit, isValidCard } from './cards.js';
+import { RANK_NAMES, RANK_VALUES, cardSuit, isValidCard } from './cards.js';
 
 /** Hand categories, ascending in strength. */
 export const HAND_CATEGORY = Object.freeze({
@@ -228,6 +228,62 @@ function score(category, tiebreaks) {
 }
 
 /**
+ * Say a score out loud: `'Two pair, kings and queens'`.
+ *
+ * This lives next to the evaluator rather than in a UI helper because it reads
+ * the *tiebreak layout* -- that a full house is `[trips, pair]` and two pair is
+ * `[high, low, kicker]` -- and that layout is this module's invariant. A
+ * consumer writing its own description would be a second place encoding it,
+ * free to drift the day a category's tiebreaks change.
+ *
+ * It replaced a version that returned only the category (`'Two Pair'`), which
+ * is the one thing a reader can already see for themselves on the board.
+ *
+ * @param {{category: number, tiebreaks: number[]}} handScore from {@link evaluateHand}
+ * @returns {string} sentence-cased, with no trailing punctuation
+ */
+export function describeHand({ category, tiebreaks = [] }) {
+  const one = rank => RANK_NAMES[rank].one;
+  const many = rank => RANK_NAMES[rank].many;
+  const [first, second] = tiebreaks;
+
+  // Every real score has the ranks its category needs; a score built by hand
+  // might not, and a missing name shouldn't take a page down over a caption.
+  if (!RANK_NAMES[first]) return HAND_CATEGORY_NAMES[category] || 'Unknown';
+
+  switch (category) {
+    case HAND_CATEGORY.STRAIGHT_FLUSH:
+      // The ace-high straight flush has its own name, and calling it anything
+      // else at a table would get you looked at.
+      return first === RANK_VALUES.A ? 'Royal flush' : `Straight flush, ${one(first)} high`;
+    case HAND_CATEGORY.FOUR_OF_A_KIND:
+      return `Four of a kind, ${many(first)}`;
+    case HAND_CATEGORY.FULL_HOUSE:
+      return `Full house, ${many(first)} full of ${many(second)}`;
+    case HAND_CATEGORY.FLUSH:
+      return `Flush, ${one(first)} high`;
+    case HAND_CATEGORY.STRAIGHT:
+      return `Straight, ${one(first)} high`;
+    case HAND_CATEGORY.THREE_OF_A_KIND:
+      return `Three of a kind, ${many(first)}`;
+    case HAND_CATEGORY.TWO_PAIR:
+      return `Two pair, ${many(first)} and ${many(second)}`;
+    case HAND_CATEGORY.PAIR:
+      return `Pair of ${many(first)}`;
+    default:
+      return `${capitalize(one(first))} high`;
+  }
+}
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function capitalize(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
  * Compare two scores from {@link evaluateHand}.
  * @param {{category: number, tiebreaks: number[]}} a
  * @param {{category: number, tiebreaks: number[]}} b
@@ -284,11 +340,3 @@ export function compareCards(handA, handB) {
   return compareHands(evaluateHand(handA), evaluateHand(handB));
 }
 
-/**
- * Describe a score for display, e.g. `'Full House'`.
- * @param {{category: number}} scoreValue
- * @returns {string}
- */
-export function describeHand(scoreValue) {
-  return HAND_CATEGORY_NAMES[scoreValue.category] || 'Unknown';
-}

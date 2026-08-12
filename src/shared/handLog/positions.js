@@ -58,6 +58,40 @@ export function derivePositions(seatCount, buttonSeat) {
 }
 
 /**
+ * Seats in the order they act on a given street.
+ *
+ * Postflop the small blind is first and the button is last, which is just
+ * "clockwise from the button". Preflop the blinds have already acted, so the
+ * first decision belongs to the seat after the big blind -- and heads-up
+ * inverts the whole thing, because the button *is* the small blind and so acts
+ * first preflop and last after it. That's the same irregularity
+ * `POSITION_ORDER_BY_SEAT_COUNT` spells out rather than derives.
+ *
+ * This drives a *suggestion* -- which seat the hand editor offers next -- not a
+ * rule. Nothing rejects an action logged out of turn; see `actions.js`.
+ *
+ * @param {number} seatCount
+ * @param {number} buttonSeat
+ * @param {string} street one of `STREET_NAMES`
+ * @returns {number[]} seat numbers, first to act first
+ */
+export function actingOrder(seatCount, buttonSeat, street) {
+  const isPreflop = street === 'preflop';
+  const headsUp = seatCount === 2;
+
+  // Postflop: the seat after the button leads. Preflop: three seats after it
+  // (button, small blind, big blind have all been passed) -- except heads-up,
+  // where the button leads preflop and trails afterwards.
+  const offset = isPreflop ? (headsUp ? 0 : 3) : 1;
+
+  const order = new Array(seatCount);
+  for (let index = 0; index < seatCount; index += 1) {
+    order[index] = (buttonSeat + offset + index) % seatCount;
+  }
+  return order;
+}
+
+/**
  * Find the seat holding a given position label.
  *
  * @param {string[]} positions from `derivePositions`

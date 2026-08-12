@@ -5,12 +5,23 @@
  * behind, which is the whole point: a link pasted to someone else has no
  * in-app state to inherit, so the cold load has to be the normal path, not a
  * fallback.
+ *
+ * The page has two modes. Its author (see `handOwnership.js` for what "author"
+ * can mean without accounts) gets the replay, the full write-up, and the edit
+ * and delete controls. Anyone opening a shared link gets a view-only page:
+ * replay and write-up, nothing that changes the record. A shared hand is
+ * something to study, and an Edit button on someone else's hand is at best a
+ * mistake waiting to happen.
  */
 
+import { derivePositions } from '/shared/handLog/index.js';
+import { BackButton } from '../components/BackButton.js';
 import { HandBuilderForm } from '../components/HandBuilderForm.js';
+import { HandReplay } from '../components/HandReplay.js';
 import { HandSummary } from '../components/HandSummary.js';
 import { deleteHand, fetchHand, updateHand } from '../services/apiClient.js';
-import { Link, navigate } from '../router.js';
+import { forgetHand, isMyHand } from '../services/handOwnership.js';
+import { Link, navigate, useSearchParam } from '../router.js';
 
 const e = React.createElement;
 
@@ -22,7 +33,18 @@ export function HandDetailPage({ id }) {
   const [hand, setHand] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [isEditing, setIsEditing] = React.useState(false);
+  const [tab, setTab] = React.useState('replay');
   const [copied, setCopied] = React.useState(false);
+
+  // View-only is for the person a hand was *shared with*, and nobody else.
+  // Two conditions have to line up for it: the link says it was shared (the
+  // `?share=1` the copy-link button hands out), and this browser isn't the one
+  // that logged the hand. So the author keeps editing on their own hand even
+  // when they follow their own share link, and a hand opened from the list --
+  // including one logged before this browser started tracking authorship --
+  // is never locked.
+  const isSharedLink = useSearchParam('share') !== null;
+  const canEdit = !isSharedLink || isMyHand(id);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -37,7 +59,7 @@ export function HandDetailPage({ id }) {
   }, [id]);
 
   function copyLink() {
-    const url = `${window.location.origin}/hands/${id}`;
+    const url = `${window.location.origin}/hands/${id}?share=1`;
     navigator.clipboard?.writeText(url)
       .then(() => {
         setCopied(true);
@@ -55,6 +77,7 @@ export function HandDetailPage({ id }) {
   async function handleDelete() {
     try {
       await deleteHand(id);
+      forgetHand(id);
       navigate('/hands');
     } catch (err) {
       setError(err.message);
@@ -93,6 +116,8 @@ export function HandDetailPage({ id }) {
     );
   }
 
+  const positions = derivePositions(hand.seats.length, hand.buttonSeat);
+
   return e(
     'div',
     { className: 'hero-card' },
@@ -101,17 +126,44 @@ export function HandDetailPage({ id }) {
       { className: 'tournament-header' },
       e('div', null,
         e('h1', null, hand.name),
-        e('p', { className: 'small' }, `${hand.format.gameType} · saved ${new Date(hand.createdAt).toLocaleDateString()}`)
+        e('p', { className: 'small' },
+          `${hand.format.gameType} · ${hand.seats.length}-handed · saved ${new Date(hand.createdAt).toLocaleDateString()}`),
+        canEdit ? null : e('span', { className: 'hand-view-only-badge' }, 'Shared hand · view only')
       ),
       e(
         'div',
         { className: 'form-actions' },
-        e(Link, { to: '/hands', className: 'ghost-button' }, 'All hands'),
-        e('button', { type: 'button', className: 'ghost-button', onClick: copyLink }, copied ? 'Link copied' : 'Copy link'),
-        e('button', { type: 'button', className: 'ghost-button', onClick: () => setIsEditing(true) }, 'Edit'),
-        e('button', { type: 'button', className: 'ghost-button danger', onClick: handleDelete }, 'Delete')
+        e(BackButton, { fallback: '/hands', label: 'Back to all hands' }),
+        e('button', { type: 'button', className: 'ghost-button', onClick: copyLink },
+          copied ? 'Link copied' : 'Copy share link'),
+        canEdit
+          ? e('button', { type: 'button', className: 'ghost-button', onClick: () => setIsEditing(true) }, 'Edit')
+          : null,
+        canEdit
+          ? e('button', { type: 'button', className: 'ghost-button danger', onClick: handleDelete }, 'Delete')
+          : null
       )
     ),
-    e(HandSummary, { hand })
+
+    e(
+      'div',
+      { className: 'hand-tabs' },
+      e('button', {
+        type: 'button',
+        className: `ghost-button ${tab === 'replay' ? 'is-active' : ''}`,
+        onClick: () => setTab('replay'),
+        'aria-pressed': tab === 'replay'
+      }, 'Replay'),
+      e('button', {
+        type: 'button',
+        className: `ghost-button ${tab === 'summary' ? 'is-active' : ''}`,
+        onClick: () => setTab('summary'),
+        'aria-pressed': tab === 'summary'
+      }, 'Full write-up')
+    ),
+
+    tab === 'replay'
+      ? e(HandReplay, { hand, positions })
+      : e(HandSummary, { hand })
   );
 }

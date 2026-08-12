@@ -19,9 +19,11 @@
  */
 
 import { computeClockState, generateBlindStructure, suggestPayoutSplit } from '/shared/tournament/index.js';
+import { BackButton } from '../components/BackButton.js';
 import { TournamentClock } from '../components/TournamentClock.js';
 import { TournamentPayouts } from '../components/TournamentPayouts.js';
 import { TournamentRoster } from '../components/TournamentRoster.js';
+import { TournamentStatus } from '../components/TournamentStatus.js';
 import {
   createTournament,
   deleteTournament,
@@ -188,8 +190,17 @@ function TournamentListView({ tournaments, isLoading, error, showCreateForm, onS
                   'button',
                   { type: 'button', className: 'tournament-list-open', onClick: () => onOpen(tournament.id) },
                   e('span', { className: 'tournament-list-name' }, tournament.name),
-                  e('span', { className: 'footnote' },
-                    `${tournament.status} · ${tournament.activePlayerCount}/${tournament.playerCount} players`)
+                  e(
+                    'span',
+                    { className: 'footnote tournament-list-status' },
+                    e(TournamentStatus, {
+                      status: tournament.status,
+                      clockStatus: tournament.clockStatus,
+                      level: tournament.currentLevel,
+                      isFinalLevel: tournament.isFinalLevel
+                    }),
+                    `${tournament.activePlayerCount}/${tournament.playerCount} players`
+                  )
                 ),
                 e('button', {
                   type: 'button',
@@ -350,12 +361,21 @@ export function TournamentManagerPage() {
       { className: 'tournament-header' },
       e('div', null,
         e('h1', null, tournament.name),
-        e('p', { className: 'small' }, `Status: ${tournament.status}`)
+        // The live clock, not the stored one: the header's level has to change
+        // the moment the countdown rolls over, the same as the clock panel's.
+        e('p', { className: 'small' }, e(TournamentStatus, {
+          status: tournament.status,
+          clockStatus: tournament.clock.status,
+          level: liveClock.level,
+          isFinalLevel: liveClock.isFinalLevel
+        }))
       ),
       e(
         'div',
         { className: 'form-actions' },
-        e('button', { type: 'button', className: 'ghost-button', onClick: backToList }, 'Back to list'),
+        // The list is state here, not a route, so the return control is given
+        // the handler rather than being left to pop history.
+        e(BackButton, { onClick: backToList, label: 'Back to all tournaments' }),
         tournament.status !== 'setup'
           ? e('button', {
               type: 'button',

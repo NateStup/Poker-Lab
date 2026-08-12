@@ -165,7 +165,7 @@ describe('validateHandLogRequest', () => {
     assert.equal(withCheck.value.streets.preflop.actions[0].amount, 0);
   });
 
-  it('rejects actions and winners referring to seats that do not exist', () => {
+  it('rejects an action referring to a seat that does not exist', () => {
     assert.equal(validateHandLogRequest(validPayload({
       streets: {
         preflop: { board: [], actions: [{ seatNumber: 99, type: 'fold' }], notes: '' },
@@ -174,8 +174,6 @@ describe('validateHandLogRequest', () => {
         river: { board: [], actions: [], notes: '' }
       }
     })).valid, false);
-
-    assert.equal(validateHandLogRequest(validPayload({ result: { winningSeats: [99], notes: '' } })).valid, false);
   });
 
   it('rejects a button or straddle seat that is off the table', () => {
@@ -193,10 +191,17 @@ describe('validateHandLogRequest', () => {
     assert.ok(errors.some(error => error.includes('straddleAmount')), errors.join(' '));
   });
 
-  it('deduplicates repeated winning seats', () => {
-    const { valid, value } = validateHandLogRequest(validPayload({ result: { winningSeats: [2, 2, 3], notes: '' } }));
+  it('keeps the result to notes, ignoring a winner sent by an older client', () => {
+    // Who won is derived from the hand now (`determineWinners`). A stored
+    // record written before that change still has `winningSeats` in it, so it
+    // has to load rather than fail validation on the way back in.
+    const { valid, value } = validateHandLogRequest(validPayload({
+      result: { winningSeats: [2, 3], notes: 'ran good' }
+    }));
+
     assert.ok(valid);
-    assert.deepEqual(value.result.winningSeats, [2, 3]);
+    assert.equal(value.result.notes, 'ran good');
+    assert.ok(!('winningSeats' in value.result), 'the winner is not stored');
   });
 
   it('accepts poker that is odd but not impossible', () => {

@@ -3,6 +3,7 @@
  */
 
 import { Link } from '../router.js';
+import { SpadeMark } from './Logo.js';
 
 const e = React.createElement;
 
@@ -24,7 +25,7 @@ export function Nav({ path }) {
     e(
       Link,
       { to: '/', className: 'site-title' },
-      e('span', { className: 'site-title-mark', 'aria-hidden': 'true' }, '♠'),
+      e(SpadeMark, { size: '1.1em', className: 'site-title-mark' }),
       'Poker Lab'
     ),
     e(

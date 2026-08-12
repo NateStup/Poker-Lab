@@ -7,6 +7,8 @@
  * exactly what ticks on screen between server syncs.
  */
 
+import { describeLevel } from './TournamentStatus.js';
+
 const e = React.createElement;
 
 /** @param {number} ms @returns {string} `'MM:SS'`, floored to the second */
@@ -15,12 +17,6 @@ function formatClock(ms) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-/** @param {number} amount @returns {string} `'25/50'` or `'25/50 (ante 25)'` */
-function describeLevel(level) {
-  const blinds = `${level.smallBlind.toLocaleString()}/${level.bigBlind.toLocaleString()}`;
-  return level.ante > 0 ? `${blinds} (ante ${level.ante.toLocaleString()})` : blinds;
 }
 
 /**

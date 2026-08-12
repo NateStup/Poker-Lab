@@ -15,7 +15,8 @@
  * 100 already posted is subtracted automatically rather than double-counted.
  */
 
-import { bigBlindSeat, derivePositions, smallBlindSeat } from './positions.js';
+import { determineWinners } from './analysis.js';
+import { actingOrder, bigBlindSeat, derivePositions, smallBlindSeat } from './positions.js';
 
 /** @type {readonly string[]} the four streets, in dealing order */
 export const STREET_NAMES = Object.freeze(['preflop', 'flop', 'turn', 'river']);
@@ -74,6 +75,36 @@ export function deriveForcedBets({ seats, buttonSeat, format }) {
 }
 
 /**
+ * The chips an action actually moves, given what the seat has already put in
+ * this street and what it has left.
+ *
+ * Two clamps, and both exist because a hand typed from memory is allowed to be
+ * wrong in ways a real hand can't be:
+ *
+ * - A "to" amount *below* what the seat already committed would mean chips
+ *   coming back out of the pot. Nothing legal produces that; a mistyped log
+ *   shouldn't be able to shrink the pot either.
+ * - A "to" amount *above* what the seat has left is an all-in. A player cannot
+ *   bet chips they don't have, so logging "raise to 5000" with 600 behind puts
+ *   600 in and leaves the stack at zero -- rather than the negative stack it
+ *   used to produce, which then showed up as a seat playing on with less than
+ *   nothing for the rest of the replay.
+ *
+ * Every walk over the action list goes through here, so the three of them
+ * (`computeHandDerived`, `buildReplayFrames`, `streetBettingState`) cannot
+ * disagree about what a given action cost.
+ *
+ * @param {number} amount the action's `amount` (a street total)
+ * @param {number} alreadyCommitted what the seat has out on this street already
+ * @param {number} remainingStack what the seat has left behind
+ * @returns {number} chips moving into the pot, never negative
+ */
+export function commitIncrement(amount, alreadyCommitted, remainingStack) {
+  const wanted = Math.max(0, amount - alreadyCommitted);
+  return Math.min(wanted, Math.max(0, remainingStack));
+}
+
+/**
  * Every number a logged hand displays: pot progression, per-seat
  * contributions, ending stacks, and who won what.
  *
@@ -86,12 +117,13 @@ export function deriveForcedBets({ seats, buttonSeat, format }) {
  *   totalPot: number,
  *   contributionsBySeat: number[],
  *   stackAfterBySeat: number[],
+ *   winningSeats: number[],
  *   payouts: Array<{seatNumber: number, amount: number}>,
  *   netBySeat: number[]
  * }}
  */
 export function computeHandDerived(hand) {
-  const { seats, buttonSeat, format, streets, result } = hand;
+  const { seats, buttonSeat, format, streets } = hand;
   const seatCount = seats.length;
 
   const positions = derivePositions(seatCount, buttonSeat);
@@ -110,21 +142,32 @@ export function computeHandDerived(hand) {
 
     if (street === 'preflop') {
       for (const bet of forcedBets) {
-        committedThisStreet[bet.seatNumber] += bet.amount;
-        contributionsBySeat[bet.seatNumber] += bet.amount;
-        runningPot += bet.amount;
+        // Clamped like every other commitment: a stack too short to cover the
+        // blind posts what it has and is all in, which is a real spot in any
+        // tournament and used to produce a negative stack here.
+        const seat = bet.seatNumber;
+        const increment = commitIncrement(
+          committedThisStreet[seat] + bet.amount,
+          committedThisStreet[seat],
+          seats[seat].stack - contributionsBySeat[seat]
+        );
+        committedThisStreet[seat] += increment;
+        contributionsBySeat[seat] += increment;
+        runningPot += increment;
       }
     }
 
     for (const action of streets[street].actions) {
       if (!ACTION_TYPES_WITH_AMOUNT.includes(action.type)) continue;
 
-      // A "to" amount below what the seat already put in this street would
-      // mean chips coming back out of the pot. Nothing legal produces that,
-      // but a mistyped log shouldn't be able to shrink the pot either.
-      const increment = Math.max(0, action.amount - committedThisStreet[action.seatNumber]);
-      committedThisStreet[action.seatNumber] += increment;
-      contributionsBySeat[action.seatNumber] += increment;
+      const seat = action.seatNumber;
+      const increment = commitIncrement(
+        action.amount,
+        committedThisStreet[seat],
+        seats[seat].stack - contributionsBySeat[seat]
+      );
+      committedThisStreet[seat] += increment;
+      contributionsBySeat[seat] += increment;
       runningPot += increment;
     }
 
@@ -134,7 +177,8 @@ export function computeHandDerived(hand) {
 
   const totalPot = runningPot;
   const stackAfterBySeat = seats.map((seat, index) => seat.stack - contributionsBySeat[index]);
-  const payouts = splitPot(totalPot, result.winningSeats);
+  const winningSeats = determineWinners(hand);
+  const payouts = splitPot(totalPot, winningSeats);
 
   // Subtracting from zero rather than negating keeps an uninvolved seat at
   // 0 instead of -0, which would otherwise leak into the API response.
@@ -154,9 +198,124 @@ export function computeHandDerived(hand) {
     totalPot,
     contributionsBySeat,
     stackAfterBySeat,
+    winningSeats,
     payouts,
     netBySeat
   };
+}
+
+/**
+ * The betting picture partway through a street: who has what out, who is
+ * still in, what it costs to call, and what everyone has left.
+ *
+ * This is what makes the hand editor able to *offer* an action instead of
+ * asking the user to work one out. Logging "call" should not require adding up
+ * the raise that's already on the table, and a bet slider needs to know the
+ * seat's remaining stack to know where its maximum is.
+ *
+ * It walks the same action list `computeHandDerived` does, through the same
+ * `commitIncrement`, which is what keeps the amount the editor suggests equal
+ * to the amount the saved hand will report.
+ *
+ * @param {object} hand a hand record, possibly still being edited
+ * @param {string} street which street to stop on
+ * @param {number} [actionCount] apply only this many of that street's actions
+ *   (defaults to all of them) -- an editor previewing "what would this seat
+ *   face" passes the count it has so far
+ * @returns {{
+ *   committed: number[], contributed: number[], stacks: number[],
+ *   folded: boolean[], allIn: boolean[], highestBet: number, pot: number
+ * }} `committed` is per seat on this street; `contributed` is across the hand
+ */
+export function streetBettingState(hand, street, actionCount = Infinity) {
+  const { seats, buttonSeat, format, streets } = hand;
+  const seatCount = seats.length;
+
+  const contributed = new Array(seatCount).fill(0);
+  const folded = new Array(seatCount).fill(false);
+  let committed = new Array(seatCount).fill(0);
+  let pot = 0;
+
+  for (const name of STREET_NAMES) {
+    // Each street starts with a clean slate in front of the seats; only
+    // preflop opens with money already out.
+    committed = new Array(seatCount).fill(0);
+
+    if (name === 'preflop') {
+      for (const bet of deriveForcedBets({ seats, buttonSeat, format })) {
+        const increment = commitIncrement(
+          committed[bet.seatNumber] + bet.amount,
+          committed[bet.seatNumber],
+          seats[bet.seatNumber].stack - contributed[bet.seatNumber]
+        );
+        committed[bet.seatNumber] += increment;
+        contributed[bet.seatNumber] += increment;
+        pot += increment;
+      }
+    }
+
+    const actions = name === street
+      ? streets[name].actions.slice(0, Math.max(0, actionCount))
+      : streets[name].actions;
+
+    for (const action of actions) {
+      const seat = action.seatNumber;
+      if (action.type === 'fold') {
+        folded[seat] = true;
+        continue;
+      }
+      if (!ACTION_TYPES_WITH_AMOUNT.includes(action.type)) continue;
+
+      const increment = commitIncrement(action.amount, committed[seat], seats[seat].stack - contributed[seat]);
+      committed[seat] += increment;
+      contributed[seat] += increment;
+      pot += increment;
+    }
+
+    if (name === street) break;
+  }
+
+  const stacks = seats.map((seat, index) => seat.stack - contributed[index]);
+
+  return {
+    committed,
+    contributed,
+    stacks,
+    folded,
+    allIn: stacks.map((stack, index) => stack <= 0 && contributed[index] > 0),
+    highestBet: Math.max(0, ...committed),
+    pot
+  };
+}
+
+/**
+ * The seat the editor should offer next: the first one after the last actor
+ * that is still in the hand and still has chips.
+ *
+ * A default, not a rule -- the seat picker stays free, because a hand
+ * reconstructed from memory is often logged with only the actions that
+ * mattered, and insisting on turn order would make that impossible to type.
+ *
+ * @param {object} hand
+ * @param {string} street
+ * @param {number} [actionCount] how many of the street's actions have been
+ *   logged so far
+ * @returns {number|null} null when nobody can act (everyone is folded or all in)
+ */
+export function nextToAct(hand, street, actionCount = Infinity) {
+  const { seats, buttonSeat, streets } = hand;
+  const order = actingOrder(seats.length, buttonSeat, street);
+  const state = streetBettingState(hand, street, actionCount);
+
+  const applied = streets[street].actions.slice(0, Math.max(0, actionCount));
+  const lastActor = applied.length > 0 ? applied.at(-1).seatNumber : null;
+  const startAt = lastActor === null ? 0 : (order.indexOf(lastActor) + 1) % order.length;
+
+  for (let step = 0; step < order.length; step += 1) {
+    const seat = order[(startAt + step) % order.length];
+    if (!state.folded[seat] && !state.allIn[seat]) return seat;
+  }
+  return null;
 }
 
 /**

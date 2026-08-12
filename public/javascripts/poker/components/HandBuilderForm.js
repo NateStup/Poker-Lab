@@ -11,7 +11,13 @@
  * glance who is where -- always visible.
  */
 
-import { STREET_NAMES, computeHandDerived, createEmptyHand, derivePositions } from '/shared/handLog/index.js';
+import {
+  DEFAULT_STARTING_STACK,
+  STREET_NAMES,
+  computeHandDerived,
+  createEmptyHand,
+  derivePositions
+} from '/shared/handLog/index.js';
 import { CardSlot } from './CardSlot.js';
 import { HandStreetEditor } from './HandStreetEditor.js';
 import { PokerTable } from './PokerTable.js';
@@ -47,10 +53,11 @@ function dealtBoard(hand) {
  * Grow or shrink the roster, keeping the seats that survive.
  * @param {object[]} seats
  * @param {number} seatCount
+ * @param {number} startingStack what a seat added by this resize starts with
  * @returns {object[]}
  */
-function resizeSeats(seats, seatCount) {
-  const template = createEmptyHand({ seatCount }).seats;
+function resizeSeats(seats, seatCount, startingStack) {
+  const template = createEmptyHand({ seatCount, startingStack }).seats;
   const resized = template.map((blank, index) => (seats[index] ? { ...seats[index], seatNumber: index } : blank));
 
   // Shrinking the table can remove the hero's seat, which would leave a hand
@@ -74,6 +81,15 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
   const [error, setError] = React.useState(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
+  // The base stack is a control, not part of the record: the hand stores what
+  // each seat actually had, and a second copy of "what they all started with"
+  // would be one more thing able to disagree with the seats themselves. It is
+  // seeded from the hand being edited so reopening one doesn't reset it, and
+  // it is what a seat added by growing the table starts with.
+  const [startingStack, setStartingStack] = React.useState(
+    () => initialValue.seats[0]?.stack ?? DEFAULT_STARTING_STACK
+  );
+
   const positions = derivePositions(hand.seats.length, hand.buttonSeat);
   const usedCards = allUsedCards(hand);
   // A live pot preview, computed with the same function the server uses --
@@ -96,9 +112,19 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
     }));
   }
 
+  /**
+   * Set every seat's stack at once. Individual seats can still be edited
+   * afterwards on the felt -- this is the starting point, not a lock.
+   * @param {number} stack
+   */
+  function setStartingStackForAll(stack) {
+    setStartingStack(stack);
+    setHand(current => ({ ...current, seats: current.seats.map(seat => ({ ...seat, stack })) }));
+  }
+
   function setSeatCount(seatCount) {
     setHand(current => {
-      const seats = resizeSeats(current.seats, seatCount);
+      const seats = resizeSeats(current.seats, seatCount, startingStack);
       return {
         ...current,
         seats,
@@ -112,7 +138,6 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
             ? current.format.straddleSeat
             : null
         },
-        result: { ...current.result, winningSeats: current.result.winningSeats.filter(seat => seat < seatCount) },
         streets: Object.fromEntries(STREET_NAMES.map(street => [
           street,
           { ...current.streets[street], actions: current.streets[street].actions.filter(action => action.seatNumber < seatCount) }
@@ -127,21 +152,6 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
       ...current,
       seats: current.seats.map((seat, i) => ({ ...seat, isHero: i === index }))
     }));
-  }
-
-  function toggleWinner(seatNumber) {
-    setHand(current => {
-      const winning = current.result.winningSeats;
-      return {
-        ...current,
-        result: {
-          ...current.result,
-          winningSeats: winning.includes(seatNumber)
-            ? winning.filter(seat => seat !== seatNumber)
-            : [...winning, seatNumber].sort((a, b) => a - b)
-        }
-      };
-    });
   }
 
   async function handleSubmit(event) {
@@ -251,6 +261,20 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
       e(
         'div',
         { className: 'field-group' },
+        e('label', { htmlFor: 'hand-starting-stack' }, 'Starting stacks'),
+        e('input', {
+          id: 'hand-starting-stack',
+          type: 'number',
+          min: 0,
+          step: 'any',
+          value: startingStack,
+          onChange: event => setStartingStackForAll(Number(event.target.value))
+        }),
+        e('span', { className: 'footnote' }, 'Sets every seat; edit one on the felt to differ.')
+      ),
+      e(
+        'div',
+        { className: 'field-group' },
         e('label', { htmlFor: 'hand-button-seat' }, 'Button'),
         e(
           'select',
@@ -308,10 +332,11 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
         buttonSeat: hand.buttonSeat,
         positions,
         pot: derived.totalPot,
-        winningSeats: hand.result.winningSeats,
+        winningSeats: derived.winningSeats,
         selectedSeat,
         onSelectSeat: index => setSelectedSeat(selectedSeat === index ? null : index),
-        board: dealtBoard(hand)
+        board: dealtBoard(hand),
+        bigBlind: hand.format.bigBlind
       }),
 
       seat
@@ -397,6 +422,10 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
           key: street,
           street,
           value: hand.streets[street],
+          // The editor prices this street's action against everything
+          // committed before it, so it needs the whole hand, not just its own
+          // street.
+          hand,
           seats: hand.seats,
           positions,
           usedCards,
@@ -407,40 +436,40 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
       )
     ),
 
+    // No winner picker: who takes the pot is read off the hand as it is typed
+    // (see `determineWinners`). This panel reports that reading back, and says
+    // what is missing when the hand doesn't yet answer the question -- which
+    // is the only thing the user can usefully do about it.
     e(
       'div',
       { className: 'range-panel' },
-      e('h2', null, 'Result'),
-      e('p', { className: 'footnote' }, `Pot: ${derived.totalPot.toLocaleString()}. Pick who won it -- select more than one seat for a chop.`),
       e(
         'div',
-        { className: 'hand-winner-picker' },
-        hand.seats.map(entry =>
-          e('button', {
-            key: entry.seatNumber,
-            type: 'button',
-            className: `ghost-button ${hand.result.winningSeats.includes(entry.seatNumber) ? 'is-active' : ''}`,
-            onClick: () => toggleWinner(entry.seatNumber),
-            'aria-pressed': hand.result.winningSeats.includes(entry.seatNumber)
-          }, `${positions[entry.seatNumber]} · ${entry.name}`)
-        )
+        { className: 'range-panel-head' },
+        e('h2', null, 'Outcome'),
+        e('span', { className: 'footnote' }, `Pot ${derived.totalPot.toLocaleString()}`)
       ),
       derived.payouts.length > 0
         ? e(
             'p',
-            { className: 'footnote' },
+            { className: 'hand-outcome' },
             derived.payouts.map(payout =>
               `${hand.seats[payout.seatNumber].name} wins ${payout.amount.toLocaleString()}`).join(' · ')
           )
-        : null,
+        : e(
+            'p',
+            { className: 'footnote' },
+            'Nobody has the pot yet. It goes to the last player left when everyone else folds, '
+            + 'or to the best hand once the board is complete and every player still in has both cards logged.'
+          ),
       e('textarea', {
         className: 'hand-notes',
         rows: 2,
-        placeholder: 'How did it end? Any read or lesson worth keeping?',
+        placeholder: 'Any read or lesson worth keeping?',
         value: hand.result.notes,
         maxLength: 2000,
         onChange: event => patch({ result: { ...hand.result, notes: event.target.value } }),
-        'aria-label': 'Result notes'
+        'aria-label': 'Hand notes'
       })
     ),
 

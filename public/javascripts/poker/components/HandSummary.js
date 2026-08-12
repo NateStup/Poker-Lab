@@ -55,8 +55,9 @@ export function HandSummary({ hand }) {
       buttonSeat: hand.buttonSeat,
       positions: derived.positions,
       pot: derived.totalPot,
-      winningSeats: hand.result.winningSeats,
-      board: STREET_NAMES.flatMap(street => hand.streets[street].board)
+      winningSeats: derived.winningSeats,
+      board: STREET_NAMES.flatMap(street => hand.streets[street].board),
+      bigBlind: hand.format.bigBlind
     }),
 
     derived.forcedBets.length > 0
@@ -131,7 +132,12 @@ export function HandSummary({ hand }) {
               )
             )
           )
-        : e('p', { className: 'footnote' }, 'No winner recorded for this hand.'),
+        : e(
+            'p',
+            { className: 'footnote' },
+            'The pot is unawarded: this hand ended with more than one player in it and '
+            + 'not every holding was logged, so the cards do not say who won.'
+          ),
       hand.result.notes ? e('p', { className: 'hand-summary-notes' }, hand.result.notes) : null
     )
   );

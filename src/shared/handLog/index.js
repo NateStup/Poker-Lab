@@ -11,5 +11,7 @@
  */
 
 export * from './actions.js';
+export * from './analysis.js';
 export * from './positions.js';
+export * from './replay.js';
 export * from './validation.js';

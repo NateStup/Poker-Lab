@@ -12,6 +12,7 @@ import { createEmptyHand } from '/shared/handLog/index.js';
 import { CardBadge } from '../components/CardBadge.js';
 import { HandBuilderForm } from '../components/HandBuilderForm.js';
 import { createHand, deleteHand, fetchHands } from '../services/apiClient.js';
+import { forgetHand, rememberHand } from '../services/handOwnership.js';
 import { navigate } from '../router.js';
 
 const e = React.createElement;
@@ -48,12 +49,16 @@ export function HandLoggerPage() {
 
   async function handleCreate(hand) {
     const created = await createHand(hand);
+    // Remembering the id here is what keeps the edit and delete controls on
+    // the hand for its author while a shared link opens read-only.
+    rememberHand(created.id);
     navigate(`/hands/${created.id}`);
   }
 
   async function handleDelete(id) {
     try {
       await deleteHand(id);
+      forgetHand(id);
       refresh();
     } catch (err) {
       setError(err.message);

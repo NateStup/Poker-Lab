@@ -13,7 +13,8 @@ outs, a range explorer (range-vs-hand and range-vs-range equity, range
 notation import/export, a Chen-formula "top X%" slider), a tournament
 manager (registration, buy-ins/rebuys/add-ons, a blind clock, and payouts),
 and a hand logger (recreate a hand on a table diagram, log the betting and
-your thinking street by street, then share it by link).
+your thinking street by street, then share a link that replays it action by
+action).
 Next up: a poker simulator (see [Roadmap](#roadmap)).
 
 ## Commands
@@ -64,7 +65,7 @@ gh api --method PUT repos/NateStup/myExpressApp/branches/main/protection \
 src/
   shared/poker/       Pure poker domain logic. Isomorphic — runs in Node AND the browser.
   shared/tournament/  Pure tournament domain logic (blind clock, stats, payouts). Same rules.
-  shared/handLog/     Pure hand-log domain logic (positions, forced bets, pot maths). Same rules.
+  shared/handLog/     Pure hand-log domain logic (positions, forced bets, pot maths, replay, analysis). Same rules.
   server/             Express app: config, routes, services, store, middleware.
 public/               Static frontend. Buildless native ES modules + CDN React.
 test/shared/          Domain tests (test/shared/tournament/ mirrors src/shared/tournament/).
@@ -268,6 +269,16 @@ stepper in `TournamentPayouts`), which flips the persisted
 that flag, a split chosen before the roster filled out would otherwise get
 silently overwritten by the next registration.
 
+A tournament's **status is never shown as just its `status` field**. "Active"
+answers nothing anyone asks of a list row or a header — the question is always
+what level it is on and what the blinds are, so `TournamentStatus` renders
+"Level 4 · 200/400 (ante 50)" with the bare state (not started, paused,
+complete) as the qualifier rather than the headline. The list needs level data
+to do that, which is why `#summarize` runs `computeClockState` and carries
+`currentLevel`/`clockStatus`/`isFinalLevel` — still a summary, not the whole
+structure. The open tournament's header reads the *live* clock, so its level
+rolls over with the countdown instead of at the next resync.
+
 Registration is its own piece of state (`registrationOpen`), deliberately
 **not** inferred from `status`: real tournaments keep late registration open
 after the clock has started, so "has the tournament begun" and "can people
@@ -289,25 +300,59 @@ serves as the restart.
 ## Hand-log domain (`src/shared/handLog/`)
 
 A logged hand is a table (`seats`, `buttonSeat`, `format`), four streets
-(each with `board`, `actions`, `notes`), and a stated `result`. It is a
-**logger, not a rules engine** — the line it holds is that impossible
-*data* is rejected while merely odd *poker* is not. A turn dealt before a
-flop, a card used twice, a hand with no hero: rejected. Betting after
-folding, a wild overbet, a call for less than the bet: accepted, because
+(each with `board`, `actions`, `notes`), and a `result` that is now just the
+user's own notes. It is a **logger, not a rules engine** — the line it holds
+is that impossible *data* is rejected while merely odd *poker* is not. A turn
+dealt before a flop, a card used twice, a hand with no hero: rejected. Betting
+after folding, a wild overbet, a call for less than the bet: accepted, because
 someone reconstructing a hand from memory is far likelier than someone
 making a claim about the rules. Deliberately out of scope: min-raise and
-turn-order legality, side pots, and inferring the winner from card
-strength (a real hand is often logged with the opponent's cards unknown,
-so there is frequently nothing to evaluate — the user states the result).
+turn-order legality, and side pots.
+
+**Who won used to be out of scope too, and no longer is.** The hand records
+the folds, the board and the holdings — everything the question needs — so
+asking for the winner on top of that was asking for the same fact twice, with
+nothing keeping the two answers in agreement. `determineWinners` reads it off
+the hand instead, and `result.winningSeats` is gone from the record (a payload
+that still carries one is accepted and ignored, so hands saved before the
+change still load). The objection that motivated the old design is real and is
+handled by admitting it: when the cards genuinely don't say — a villain who
+mucked unseen, a hand cut short before the river — nothing is returned, the
+pot shows as unawarded, and the UI asks for the missing holding rather than
+guessing.
 
 The one convention that makes the pot come out right: **`action.amount` is
 the total that seat has committed on that street once the action is done**
 — "raise to 300", not "put in 300 more". That is how poker is spoken, and
 it makes blinds fall out for free: a big blind calling a raise to 300 logs
 `call 300`, and `computeHandDerived` subtracts the 100 already posted
-rather than double-counting it. An amount *below* what the seat already
-committed is clamped to a zero increment, so a mistyped log can never pull
-chips back out of the pot.
+rather than double-counting it.
+
+`commitIncrement` is the single place that turns one of those totals into
+chips, and it clamps in **both** directions. Below what the seat already has
+out is clamped to zero, so a mistyped log can't pull chips back out of the
+pot. Above what the seat has left is clamped to the stack, because a player
+cannot bet chips they don't have: "raise to 5000" with 600 behind is an
+all-in for 600. Forced bets go through it too — a stack too short to cover
+the blind posts what it has. Before that clamp existed, either case produced
+a **negative stack**, which then rode along through the whole replay as a seat
+playing on with less than nothing. Every walk over the action list
+(`computeHandDerived`, `buildReplayFrames`, `streetBettingState`) goes through
+this one function, which is what stops the three of them disagreeing about
+what an action cost.
+
+Note what is *not* clamped: `deriveForcedBets` still reports the blind that
+was owed, not the short stack that was posted. It describes the obligation;
+the arithmetic decides what was payable.
+
+`streetBettingState(hand, street, actionCount)` answers "what does the seat
+about to act face" — per-seat committed, stacks, folds, all-ins, the highest
+bet, and the pot, optionally partway through a street. `nextToAct` picks the
+seat the editor should offer next, walking `actingOrder` (`positions.js`,
+where heads-up inverts: the button acts first preflop and last after it) and
+skipping seats that are folded or all in. Both exist for the editor and both
+are **suggestions** — nothing here enforces turn order, because a hand
+reconstructed from memory usually records only the actions that mattered.
 
 Forced bets are **derived, never logged**: `deriveForcedBets` computes
 antes/blinds/straddle from `format` + `buttonSeat`, so the stored `actions`
@@ -324,6 +369,62 @@ the button" rule.
 `splitPot` divides a chop evenly and gives the odd chip to the first
 winning seat, so payouts always sum to exactly the pot — the same
 one-place-absorbs-the-remainder convention as `calculatePayouts`.
+
+`buildReplayFrames` (`replay.js`) is what the replayer steps through: one
+frame per beat of the hand (each street dealt, each logged action, then the
+settle), each carrying the whole table state at that moment — board, chips in
+front of each seat, stacks, who has folded, the pot. `computeHandDerived`
+answers "how did this add up" and collapses exactly the intermediate states a
+replay needs, so this is a second walk over the same actions — but *not* a
+second implementation of the rules: both live here, share the
+`amount`-is-a-street-total convention and the same clamp on an under-committed
+amount, and there is a test asserting the last frame's pot equals
+`computeHandDerived().totalPot`. Only the browser renders it; it lives in
+`shared/` because it is pure arithmetic and belongs next to the rules it
+applies, which is also what makes it testable without a DOM. Frames carry
+structured actions and numbers, never prose — wording a frame needs seat names
+and locale-formatted chips, which is presentation.
+
+Chips move in three stages, and the frames show all three: a bet sits in front
+of a seat (`frame.bets`), gets swept into the middle when the next street is
+dealt, and is paid out on the final frame — which is the only frame whose
+`stacks` include a payout.
+
+`analysis.js` is the one module here that asks *poker* questions of a logged
+hand, and it is where the odds calculator's engine meets the hand logger:
+
+- `isRunoutSpot(frame)` — is the hand past betting and just being dealt out?
+  Three conditions, and the third is the one that's easy to miss: someone is
+  all in, **at most one** live seat still has chips (a shove called by a bigger
+  stack runs out identically — there's nobody left to bet at), and the betting
+  is actually *matched*. Without that last check, a shove still facing a
+  decision looks exactly like a called one, and the villain's cards turn face
+  up while the hero is deciding whether to call them. It deliberately ignores
+  the board, so it stays true through the river and cards that were turned over
+  stay turned over.
+- `findAllInRunout` narrows that to the spot worth pricing (cards still to
+  come, two known holdings) and `runoutEquity` calls the shared
+  `calculateEquity` against the frame's board — so the replay's equity moves
+  street by street the way it does at a table. It passes a fixed seed:
+  replaying the same hand twice must not print two different numbers, and a
+  stable seed is cheaper than caching for that. `method` is surfaced, same as
+  on the calculator page.
+- `contestingSeats` is who is still in the pot, and the rule that makes
+  auto-awarding workable in practice: **a seat that never acts and has no cards
+  logged is not in the hand.** Hands are reconstructed from memory and people
+  log the action that mattered, not six preflop folds — without this, "I raised
+  and everyone folded" would read as six live players and the pot could never
+  be awarded. A seat that posted a blind and then vanishes from the log is out,
+  and its blind stays in the pot, which is what happened at the table.
+- `determineWinners` settles the pot: one seat left contesting it wins (no
+  cards needed, which is how most hands end); otherwise a complete board with
+  every contesting holding logged is evaluated, chops included; otherwise
+  nothing.
+- `evaluateShowdown` names each hand that got there via `describeHand`. It uses
+  the *same* seat set and the same all-holdings-known requirement as
+  `determineWinners`, so it can never name a winner for a pot the hand refuses
+  to award — two answers to one question is exactly the split this directory
+  exists to prevent.
 
 ## Data store
 
@@ -393,20 +494,155 @@ stops being trivial, not before.
 
 `/hands/:id` is the first route carrying a parameter, and it needed no
 router change at all: `useRoute()` already returns the raw pathname, so
-`AppShell.pageFor` does one `startsWith` and slices the id off. It exists
+`AppShell.pageFor` does one `startsWith` and slices the id off. Share links
+(`?share=1`) did add one thing — `useSearchParam` — kept in `router.js` so
+`window.location` still has exactly one reader.
+
+**Going back.** `BackButton` is one arrow icon in the same place on every page
+that can be arrived at from somewhere else, replacing a set of text buttons
+("Back to list", "All hands") that each named a destination and so had to be
+reworded — or be wrong — the moment a page could be reached from two places.
+It defaults to `goBack(fallback)`, which pops history *only if this app pushed
+an entry* (`router.js` counts them): a shared link opened in a fresh tab has
+nothing to pop, and `history.back()` there would throw the user out of the app
+entirely, so it navigates to the fallback instead. The Tournament Manager
+passes `onClick` instead, because its list is state rather than a route. The
+arrow is an inline SVG, not a glyph — see the suit-pip note below for why
+characters can't be trusted to render as characters. It exists
 because a saved hand has to be *linkable* — that's what "share" means here,
 and it's why the Hand Logger splits list and detail across two routes
 instead of switching on state the way the Tournament Manager does.
 
-**The hand logger's table diagram.** `PokerTable` positions seats around an
-oval with trigonometry into `left`/`top` percentages rather than drawing to
-SVG or canvas, so every seat stays a real DOM button — focusable, clickable
-and screen-reader-navigable for free. It renders whatever it's handed and
-reports clicks upward; position labels are passed in (derived once by the
-page) rather than computed inside, so the diagram can't disagree with the
-rest of the page about who is on the button. Seats are edited by clicking
-one on the felt, which reveals an editor for just that seat — ten seats'
-worth of fields never appear at once, and the table stays visible.
+**The hand logger's table diagram.** `PokerTable` positions seats around the
+felt with geometry into `left`/`top` percentages rather than drawing to SVG or
+canvas, so every seat stays a real DOM button — focusable, clickable and
+screen-reader-navigable for free. It renders whatever it's handed and reports
+clicks upward; position labels are passed in (derived once by the page) rather
+than computed inside, so the diagram can't disagree with the rest of the page
+about who is on the button. Seats are edited by clicking one on the felt,
+which reveals an editor for just that seat — ten seats' worth of fields never
+appear at once, and the table stays visible.
+
+The outline is a **stadium** (two semicircular ends joined by straight sides),
+not an ellipse — that's the shape a real table is, and an ellipse left the
+middle seats visibly off the felt because its sides curve away where a table's
+run straight. Seats are spaced by *arc length* around that outline, not by
+angle, which is what keeps the gaps even; angle-stepping bunches seats up at
+the ends. All of it — the felt's box, the seat ring, and the container's
+aspect ratio, applied inline — comes from one `TABLE_SHAPE` entry, because
+geometry split between the component and the stylesheet drifts apart the first
+time either side is edited alone. Narrow screens get a *round* table: with the
+ring as wide as it is tall the stadium degenerates to a circle, so the same
+maths handles it with no special case, and a `matchMedia` hook (not a CSS-only
+breakpoint) switches shapes so the seats and the felt move together.
+
+**Chips say how big.** A wager in front of a seat is drawn as a stack whose
+height comes from `chipCount` — one chip up to a big blind (a blind, an ante,
+a limp, a min bet), taller from there. With a single chip for everything, a
+seat that already had dead money out looked identical after raising, so the
+size of the bet was only readable as a number. Forced bets carry no caption at
+all: chips in front of a seat that hasn't acted are self-evidently a blind,
+and labelling them put a word on every seat on every preflop frame.
+
+**The mark on the felt.** `Logo.js` holds the spade as an SVG path, used at
+both sizes it appears in: the header wordmark, and the faded logo stitched
+into the middle of the table. It is a path and not the `♠` character for the
+same reason the playing cards carry a text-presentation selector — a suit
+character is one font substitution away from rendering as a colour emoji, and
+a logo that changes shape per machine isn't a logo. On the felt it is
+`aria-hidden`, sits behind the board and pot, and is kept at an opacity low
+enough to read as part of the cloth; anything more competes with the cards.
+
+**Two card renderers, on purpose.** `CardBadge` is the compact token for a card
+mentioned inline — a result row, a history entry, a list. `PlayingCard` is a
+card drawn as a card (white face, rank over a single pip) for the places the
+card itself is what's being studied: the board and the hole cards on the felt.
+The felt rendered with badges read as a list of codes rather than a table.
+Face-down is `PlayingCard`'s empty state, which is why a read-only table shows
+backs for an unknown holding instead of a dash.
+
+The face carries the suit **once**. A corner index plus a centre pip is what a
+real card does at real size; in a 2.4rem box the two collide into a smudge,
+which is what the first version shipped. Suit glyphs also need help to stay
+glyphs: they carry U+FE0E (text presentation) in the markup and `--font-symbol`
+in CSS, or the browser is free to swap in a colour emoji font — Segoe UI Emoji
+on Windows — which ignores the suit colour and renders as a blob at card size.
+
+**The replayer.** `HandReplay` is the default view of a saved hand: arrows (and
+the left/right keys, and a scrubber, and a clickable timeline) step through the
+frames from `buildReplayFrames`, and the table re-renders with that frame's
+board, chips, stacks and folds. The component holds one piece of state — which
+frame — and does no arithmetic of its own; everything it shows comes out of the
+shared domain. That split is deliberate: a replayer that recomputed the pot as
+it stepped would be the second betting implementation this codebase keeps
+warning about.
+
+**View-only shared hands.** View-only is for the person a hand was *shared
+with*, and nobody else. Two conditions have to line up for it: the link says
+it was shared (`?share=1`, which is what the copy-link button hands out), and
+this browser isn't the one that logged the hand (`services/handOwnership.js`,
+which keeps created ids in `localStorage` — "author" without accounts can only
+mean "logged from this browser"). So the author keeps edit and delete on their
+own hand even following their own share link, and a hand opened from the list
+is never locked, including ones logged before authorship was tracked at all.
+**This decides what the page offers, not what the server permits** — the API
+has no notion of an owner, and the flag is a URL edit away from being removed.
+It is the honest version of the feature until there are real accounts; don't
+mistake it for access control, and don't build anything on it that needs
+enforcing.
+
+**What the replay shows of a holding.** Hero's cards are face-up throughout —
+a replay is watched from the hero's seat, and hiding what they held makes
+their decisions unreadable. Everyone else stays face-down until their cards
+became public at the table: at showdown, or the moment the last bet goes in on
+an all-in with cards to come, which is when a real table turns them over. A
+hand that ended with everyone folding reaches neither, so nothing is turned
+over even when the log knows the villain's cards. That's `revealSeats` on
+`PokerTable`: omitted, every known card shows (what the editor and the
+write-up want), and only the replay passes it.
+
+**Starting stacks are one field.** `HandBuilderForm` carries a base stack that
+writes through to every seat, and that any seat added by growing the table
+inherits; individual seats are still editable on the felt afterwards. It is
+component state, **not** part of the record — the hand stores what each seat
+actually had, and a second copy of "what they all started with" would be one
+more thing able to disagree with the seats themselves. It seeds from the hand
+being edited, so reopening one doesn't reset it.
+
+**There is no winner picker.** The old Result panel is now an Outcome panel
+that *reports* what `determineWinners` read off the hand, and says what is
+missing when the hand doesn't answer the question yet — the only thing the
+user can usefully do about it. The result notes field stays, because a
+takeaway is the user's own and can't be derived from anything.
+
+**Logging an action is a click, not a sum.** `HandStreetEditor` knows what the
+acting seat faces (`streetBettingState`), so it offers the action rather than
+asking for it: Fold, Check-or-Call (only the applicable one — offering both is
+how a log ends up with a "check" facing a raise), All in, and a slider from a
+minimum to the seat's stack with ½/¾/pot shortcuts. Nobody types an amount to
+call. That matters most for this app's street-total convention: "call 600"
+when you already have 100 out is the single most confusable number in a hand
+log, which is why the button says `Call 600 (+500)` — the total is what goes
+on the record, the increment is what leaves the stack. Sizing shortcuts round
+to the **small** blind, not the big one: at 50/100 a pot-sized raise is 350,
+and rounding to the big blind would round it up to 400, overshooting the thing
+it is named after. The number field stays free-typed, because a slider bounded
+by legality can't log a hand where something illegal actually happened.
+
+**Live equity and the showdown.** On an all-in run-out the replay shows each
+contesting hand's equity — beside that seat's cards on the felt
+(`equityBySeat` on `PokerTable`) and in a panel with bars and the method
+badge (`AllInEquity`) — recomputed against the board on every frame, so it
+moves as the turn and river land. It is the same
+`calculateEquity` the odds calculator uses, run in the browser rather than
+posted to the API — the spot is small (a flop with two to come enumerates
+exactly) and there is nothing to record. Results are cached in a ref keyed by
+board + contestants, because scrubbing back and forth revisits the same spots
+and a preflop all-in is the one genuinely expensive thing on the page. Once
+the board completes, `ShowdownResult` names each hand in full ("Two pair,
+kings and queens") and says who won. The showdown reads on the **river frame**
+for a run-out, not one step later on the settle — the river landing is what
+settles it — and only at the end for a hand that was still being bet.
 
 Board cards, like every other card position in this app, are **fixed-size
 arrays with `null` holes** while being edited. Closing the gaps as cards are
@@ -496,9 +732,10 @@ Keep this section current — it is how a new session learns what "next" means.
 4. **Tournament seating/table balancing** — the manager currently tracks
    registration, stacks, the clock, and payouts, but not seat assignments;
    a natural extension once multi-table events are in scope.
-5. **Hand-log extras** — replay the streets one action at a time, run a
-   logged spot through `calculateEquity` to see what the hero's equity
-   actually was, and import from a site's hand-history text format. The
+5. **Hand-log extras** — equity at every *decision*, not just at an all-in
+   (the frame is already the right input; what's missing is a defensible way
+   to show a number for a spot where folding is still possible), autoplay for
+   the replayer, and import from a site's hand-history text format. The
    structured `streets`/`actions` model was chosen with these in mind.
 
 ## Gotchas

@@ -317,6 +317,20 @@ describe('/api/tournaments', () => {
     assert.ok(!('players' in body.items[0]), 'the list view should be a lightweight summary');
   });
 
+  it('summarises which level a tournament is on, not just that it is active', async () => {
+    // A list row saying "active" answers nothing useful -- the question is
+    // always what level and what blinds, so the summary carries the level.
+    const { body } = await api('/api/tournaments');
+    const summary = body.items[0];
+
+    assert.ok(summary.currentLevel, 'the summary carries the current level');
+    assert.equal(typeof summary.currentLevel.level, 'number');
+    assert.equal(typeof summary.currentLevel.smallBlind, 'number');
+    assert.equal(typeof summary.currentLevel.bigBlind, 'number');
+    assert.ok(['running', 'paused'].includes(summary.clockStatus));
+    assert.ok(!('structure' in summary), 'but not the whole blind structure');
+  });
+
   it('runs a full lifecycle: register, buy in, start the clock, and eliminate down to a winner', async () => {
     const created = await api('/api/tournaments', {
       method: 'POST',
@@ -552,11 +566,13 @@ describe('/api/hands', () => {
             actions: [{ seatNumber: 3, type: 'raise', amount: 6 }, { seatNumber: 2, type: 'call', amount: 6 }],
             notes: 'opened from UTG, I defended'
           },
-          flop: { board: ['As', 'Kd', '7h'], actions: [], notes: 'top pair' },
+          // The big blind folds the flop, which is what hands seat 3 the pot --
+          // no winner is sent in the payload.
+          flop: { board: ['As', 'Kd', '7h'], actions: [{ seatNumber: 2, type: 'fold' }], notes: 'top pair' },
           turn: { board: [], actions: [], notes: '' },
           river: { board: [], actions: [], notes: '' }
         },
-        result: { winningSeats: [3], notes: 'held up' }
+        result: { notes: 'held up' }
       }))
     });
 
@@ -566,6 +582,7 @@ describe('/api/hands', () => {
     assert.equal(body.derived.totalPot, 13);
     assert.equal(body.derived.potAfterStreet.preflop, 13);
     assert.equal(body.derived.positions[0], 'BTN');
+    assert.deepEqual(body.derived.winningSeats, [3], 'the winner is derived, not supplied');
     assert.deepEqual(body.derived.payouts, [{ seatNumber: 3, amount: 13 }]);
     assert.equal(body.derived.furthestStreet, 'flop');
     assert.equal(body.streets.preflop.notes, 'opened from UTG, I defended');

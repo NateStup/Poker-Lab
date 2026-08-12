@@ -14,6 +14,9 @@ import { HOLE_CARD_COUNT, findDuplicateCards, normalizeCard } from '../poker/car
 import { ACTION_TYPES, ACTION_TYPES_WITH_AMOUNT, STREET_BOARD_SIZE, STREET_NAMES } from './actions.js';
 import { MAX_PLAYERS, MIN_PLAYERS } from './positions.js';
 
+/** What a seat starts with when nothing else is said. 100 big blinds at 1/2. */
+export const DEFAULT_STARTING_STACK = 200;
+
 const NAME_MAX_LENGTH = 120;
 const NOTES_MAX_LENGTH = 2000;
 const SEAT_NAME_MAX_LENGTH = 40;
@@ -278,29 +281,22 @@ function normalizeStreets(streets, seatCount, errors) {
 }
 
 /**
+ * The result is now just the user's own commentary.
+ *
+ * Who won is **derived** (`determineWinners`), not stated: the hand already
+ * records the folds, the board and the holdings, and asking for the winner on
+ * top of that was asking for the same fact twice -- with nothing keeping the
+ * two answers in agreement. A `winningSeats` sent by an older client is
+ * accepted and ignored rather than rejected, so hands saved before the change
+ * still load.
+ *
  * @param {unknown} result
- * @param {number} seatCount
  * @param {string[]} errors collected in place
- * @returns {object}
+ * @returns {{notes: string}}
  */
-function normalizeResult(result, seatCount, errors) {
+function normalizeResult(result, errors) {
   const source = result && typeof result === 'object' ? result : {};
-  const rawWinners = Array.isArray(source.winningSeats) ? source.winningSeats : [];
-
-  const winningSeats = [];
-  for (const raw of rawWinners) {
-    const seatNumber = Number(raw);
-    if (!Number.isInteger(seatNumber) || seatNumber < 0 || seatNumber >= seatCount) {
-      errors.push(`\`result.winningSeats\` has an unknown seat: ${JSON.stringify(raw)}.`);
-      continue;
-    }
-    if (!winningSeats.includes(seatNumber)) winningSeats.push(seatNumber);
-  }
-
-  return {
-    winningSeats,
-    notes: normalizeNotes(source.notes, NOTES_MAX_LENGTH, '`result.notes`', errors)
-  };
+  return { notes: normalizeNotes(source.notes, NOTES_MAX_LENGTH, '`result.notes`', errors) };
 }
 
 /**
@@ -331,7 +327,7 @@ export function validateHandLogRequest(payload = {}) {
   }
 
   const streets = normalizeStreets(payload.streets, seatCount, errors);
-  const result = normalizeResult(payload.result, seatCount, errors);
+  const result = normalizeResult(payload.result, errors);
 
   const duplicates = findDuplicateCards(
     ...seats.map(seat => seat.cards.filter(Boolean)),
@@ -357,9 +353,12 @@ export function validateHandLogRequest(payload = {}) {
  *
  * @param {object} [options]
  * @param {number} [options.seatCount]
+ * @param {number} [options.startingStack] what every seat starts with; the
+ *   editor offers this as one field rather than making the user set the same
+ *   number six times
  * @returns {object}
  */
-export function createEmptyHand({ seatCount = 6 } = {}) {
+export function createEmptyHand({ seatCount = 6, startingStack = DEFAULT_STARTING_STACK } = {}) {
   const streets = {};
   for (const street of STREET_NAMES) {
     streets[street] = { board: [], actions: [], notes: '' };
@@ -371,12 +370,12 @@ export function createEmptyHand({ seatCount = 6 } = {}) {
     seats: Array.from({ length: seatCount }, (_unused, index) => ({
       seatNumber: index,
       name: `Seat ${index + 1}`,
-      stack: 200,
+      stack: startingStack,
       isHero: index === 0,
       cards: new Array(HOLE_CARD_COUNT).fill(null)
     })),
     buttonSeat: 0,
     streets,
-    result: { winningSeats: [], notes: '' }
+    result: { notes: '' }
   };
 }
