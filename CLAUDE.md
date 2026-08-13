@@ -428,10 +428,11 @@ hand, and it is where the odds calculator's engine meets the hand logger:
 
 ## Data store
 
-`DataStore` (abstract) → `JsonFileStore` (JSON files) → `HistoryRepository`
-(domain-level API). Services depend on the repository, never on a concrete store,
-so swapping in SQLite means one new class and one line in
-[src/server/store/index.js](src/server/store/index.js).
+`DataStore` (abstract) → `JsonFileStore` (JSON files) → a repository per record
+type (`HistoryRepository`, `TournamentRepository`, `HandLogRepository`), each
+exposing a domain-level API over the same store class. Services depend on the
+repository, never on a concrete store, so swapping in SQLite means one new class
+and one line in [src/server/store/index.js](src/server/store/index.js).
 
 `JsonFileStore` guards three specific failure modes; don't regress them:
 
@@ -447,7 +448,9 @@ only meaningful if the run can be replayed.
 `DataStore#update(id, updater)` is a read-modify-write: `HistoryRepository`
 never needed it (a calculation result is immutable once stored), but
 `TournamentRepository` uses it for everything after creation — a tournament's
-roster, clock, and blind level all change constantly. The read, `updater`
+roster, clock, and blind level all change constantly — and `HandLogRepository`
+uses it for `PATCH /api/hands/:id`, where the edit is merged over the stored
+record and then validated in full. The read, `updater`
 call, and write into the in-memory array happen synchronously in one tick
 (only the disk `flush()` after is async), so two `update()` calls on the same
 id can't interleave and silently lose one's change.
