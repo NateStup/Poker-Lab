@@ -94,7 +94,22 @@ body {
   position: relative;
   min-height: 100vh;
   overflow-x: hidden;
-  isolation: isolate;
+  /* Deliberately *not* `isolation: isolate`.
+   *
+   * Isolating here reads like the safe way to pin `::before` below the content,
+   * and it is also what left a band of the previous page painted under the
+   * footer when a tall route was replaced by a short one. Making the body its
+   * own stacking context gets the whole page rastered into tiles that Chrome
+   * then failed to invalidate on that shrink -- the giveaway being that the
+   * band never repainted (nothing under paint-flashing) yet reappeared when a
+   * hover finished, i.e. a cached tile being composited back in rather than
+   * stale pixels sitting untouched. Bisecting the body's properties one at a
+   * time put it on this one.
+   *
+   * Nothing needs it. The pattern is pinned from both sides already: the spec
+   * paints negative-z-index descendants after the canvas background, which
+   * keeps `::before` above it, and `.site-header/.site-content/.site-footer`
+   * each carry `z-index: 1`, which keeps the content above `::before`. */
 }
 
 body::before {
@@ -1544,9 +1559,12 @@ button:disabled {
   opacity: 0.5;
 }
 
+/* Bottom-aligned, not centred: the stack grows upward from the felt, so the
+   amount beside it belongs next to where the chips sit rather than floating to
+   the middle of a stack whose height changes with every wager. */
 .poker-table-bet-chips {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.25rem;
   font-size: 0.75rem;
   font-weight: 800;
@@ -1554,28 +1572,14 @@ button:disabled {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
 
-/* Chips are drawn as a stack, tallest for the biggest wagers -- see
-   `chipCount`. `column-reverse` puts the first chip at the bottom and lets
-   each one above overlap it, which is both how a stack looks and the paint
-   order that makes the overlap read the right way round. */
-.poker-table-chip-stack {
-  display: inline-flex;
-  flex-direction: column-reverse;
-  align-items: center;
-}
-
-.poker-table-chip {
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 50%;
-  background: radial-gradient(circle at 32% 30%, #fbbf24, #b45309);
-  border: 2px solid rgba(248, 250, 252, 0.75);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+/* Only the width is set here. The height follows from the viewBox, which is
+   what keeps a one-chip wager flat and a five-chip one tall -- see
+   `ChipStack.js`, which owns every other number about a chip. */
+.chip-stack {
+  width: 2rem;
+  height: auto;
+  display: block;
   flex: 0 0 auto;
-}
-
-.poker-table-chip-stack .poker-table-chip:not(:first-child) {
-  margin-bottom: -0.5rem;
 }
 
 .poker-table-seat {
@@ -2143,6 +2147,10 @@ button.poker-table-seat:hover {
 
   .poker-table-board {
     min-height: 2.6rem;
+  }
+
+  .chip-stack {
+    width: 1.5rem;
   }
 
   /* Less felt to lift the mark into. */

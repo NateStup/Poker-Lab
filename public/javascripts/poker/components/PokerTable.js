@@ -25,6 +25,7 @@
  * the page can never disagree about who is on the button.
  */
 
+import { ChipStack } from './ChipStack.js';
 import { TableLogo } from './Logo.js';
 import { PlayingCard } from './PlayingCard.js';
 
@@ -62,30 +63,6 @@ const ACTION_LABELS = Object.freeze({
   bet: 'Bets',
   raise: 'Raises to'
 });
-
-/**
- * How many chips to draw for a wager, in big blinds.
- *
- * A single chip means "nothing has happened here yet" -- a blind, an ante, a
- * limp, a min bet. Anything bigger gets a stack, and a taller one the bigger
- * it is, so a raise is visible as a *shape* across the table rather than as a
- * number to be read. That is the whole point: with one chip for everything,
- * a seat that already had dead money out looked identical after raising.
- *
- * @param {number} amount chips in front of the seat
- * @param {number} bigBlind the hand's big blind; 0 when unknown
- * @returns {number} 1 to 5
- */
-function chipCount(amount, bigBlind) {
-  if (!(bigBlind > 0)) return 1;
-
-  const blinds = amount / bigBlind;
-  if (blinds <= 1) return 1;
-  if (blinds <= 3) return 2;
-  if (blinds <= 8) return 3;
-  if (blinds <= 20) return 4;
-  return 5;
-}
 
 /**
  * A point on the stadium outline, `t` of the way around it.
@@ -340,12 +317,7 @@ export function PokerTable({
                 ? e(
                     'span',
                     { className: 'poker-table-bet-chips' },
-                    e(
-                      'span',
-                      { className: 'poker-table-chip-stack', 'aria-hidden': 'true' },
-                      Array.from({ length: chipCount(bet, bigBlind) }, (_unused, chip) =>
-                        e('span', { key: chip, className: 'poker-table-chip' }))
-                    ),
+                    e(ChipStack, { amount: bet, bigBlind }),
                     e('strong', null, bet.toLocaleString())
                   )
                 : null

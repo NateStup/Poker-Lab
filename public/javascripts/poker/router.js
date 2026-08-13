@@ -11,6 +11,18 @@
 const listeners = new Set();
 
 /**
+ * Where a navigation lands is this app's decision, not the browser's.
+ *
+ * Left on the default (`'auto'`), the browser restores the previous entry's
+ * scroll offset on a back/forward against a document React has not re-rendered
+ * yet, so the app has to own the scroll on every path change -- see `notify`
+ * for the part that actually matters.
+ */
+if ('scrollRestoration' in window.history) {
+  window.history.scrollRestoration = 'manual';
+}
+
+/**
  * Navigate to a new path, pushing a history entry and notifying every
  * `useRoute` subscriber.
  * @param {string} path
@@ -22,8 +34,29 @@ export function navigate(path) {
   notify();
 }
 
+/**
+ * Publish the new path -- but scroll to the top *first*, before any subscriber
+ * re-renders.
+ *
+ * The order is the whole point, and getting it backwards is a real bug this
+ * app shipped. Leaving a tall page while scrolled down, the sequence used to
+ * be: React commits the short page, the document collapses under a scroll
+ * offset that is now past its end, the browser clamps the offset back to zero,
+ * and a band of the page that just went away is left painted below the new one
+ * -- the hand replayer's felt showing under a page whose shell is 300px
+ * narrower than the felt is wide. Scrolling after the commit cannot fix that:
+ * by then the clamp has already happened, and `scrollTo(0, 0)` at an offset of
+ * zero is a no-op that invalidates nothing.
+ *
+ * Scrolling here instead means the document only ever shrinks while the
+ * viewport is already at the top, so there is no offset left to clamp. It
+ * belongs in this module rather than in a component effect for the same reason
+ * `useSearchParam` does: one reader and one writer of `window.location` and
+ * the history, and no page has to remember to do it.
+ */
 function notify() {
   const path = window.location.pathname;
+  window.scrollTo(0, 0);
   for (const listener of listeners) listener(path);
 }
 

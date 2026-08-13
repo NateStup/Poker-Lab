@@ -498,6 +498,35 @@ router change at all: `useRoute()` already returns the raw pathname, so
 (`?share=1`) did add one thing — `useSearchParam` — kept in `router.js` so
 `window.location` still has exactly one reader.
 
+**Where a navigation lands is the app's call, not the browser's.**
+`router.js` sets `history.scrollRestoration = 'manual'` and scrolls to the top
+in `notify()` — **before** the new path reaches any subscriber, which is the
+part that matters. Leaving a tall page while scrolled down, the old order let
+React commit the short page first: the document collapsed under a scroll
+offset now past its end, the browser clamped the offset back to zero, and a
+band of the page that just went away stayed painted below the new one (the
+replayer's felt, unmistakable at 593px wide under a shell capped at 800px).
+Scrolling from a component effect *after* the commit cannot fix that — the
+clamp has already happened, and `scrollTo(0, 0)` at offset zero is a no-op
+that invalidates nothing. Scrolling first means the document only ever shrinks
+while the viewport is already at the top, so there is no offset to clamp. Note
+this is not only a back/forward case: it bites a plain nav-link click too,
+where `scrollRestoration` never enters into it.
+
+That was half of it. The other half was `isolation: isolate` on `body`, now
+removed — see the comment there, and don't put it back. Making the body its own
+stacking context got the whole page rastered into tiles Chrome then failed to
+invalidate when a tall route was replaced by a short one, leaving a band of the
+previous page painted under the footer. Two symptoms are worth recognising
+again, because between them they identify a *cached tile* rather than stale
+pixels: the band never repainted (no flash under DevTools' paint flashing) and
+yet it came back after a hover elsewhere on the page finished. It was found by
+overriding the body's properties one at a time in the console, which is the
+cheapest tool for this and worth reaching for before theorising — two
+plausible-sounding diagnoses (the canvas background propagating off `body`,
+and `body::before`'s `mask-image` forcing a composited layer) were both wrong,
+and each cost a round trip to disprove.
+
 **Going back.** `BackButton` is one arrow icon in the same place on every page
 that can be arrived at from somewhere else, replacing a set of text buttons
 ("Back to list", "All hands") that each named a destination and so had to be
@@ -536,13 +565,29 @@ ring as wide as it is tall the stadium degenerates to a circle, so the same
 maths handles it with no special case, and a `matchMedia` hook (not a CSS-only
 breakpoint) switches shapes so the seats and the felt move together.
 
-**Chips say how big.** A wager in front of a seat is drawn as a stack whose
-height comes from `chipCount` — one chip up to a big blind (a blind, an ante,
-a limp, a min bet), taller from there. With a single chip for everything, a
-seat that already had dead money out looked identical after raising, so the
-size of the bet was only readable as a number. Forced bets carry no caption at
-all: chips in front of a seat that hasn't acted are self-evidently a blind,
-and labelling them put a word on every seat on every preflop frame.
+**Chips say how big.** A wager in front of a seat is drawn by `ChipStack.js`,
+whose one table (`CHIP_TIERS`) decides both how tall the stack is and what
+colour it is, in big blinds — one white chip up to a big blind (a blind, an
+ante, a limp, a min bet), five purple ones past twenty. Height and colour come
+out of the same row on purpose: with a single chip for everything, a seat that
+already had dead money out looked identical after raising, and height alone
+tops out, because past a handful of chips a stack can't get taller without
+running off the felt. Colour carries the reading from there, the way a real
+denomination does. Forced bets carry no caption at all: chips in front of a
+seat that hasn't acted are self-evidently a blind, and labelling them put a
+word on every seat on every preflop frame.
+
+The chips are **SVG, not styled `div`s** — same reason as the logo and the back
+arrow. A chip is a shape (an ellipse seen from across the table, with a side
+wall under it), and CSS can only fake that by overlapping circles, which is
+what the first version did and why a stack read as one icon printed several
+times. Each chip is drawn as a cylinder, but only the *top* one gets a face:
+the wall of each chip plus the face above it exactly tile the face below, so
+the whole stack is painted once with nothing showing through. The stripes
+running down the side walls are the detail that sells it at felt size — they
+are what the eye reads as "separate chips" long before it can count them.
+`ChipStack.js` owns every number about a chip; the stylesheet sets its width
+and nothing else.
 
 **The mark on the felt.** `Logo.js` holds the spade as an SVG path, used at
 both sizes it appears in: the header wordmark, and the faded logo stitched
