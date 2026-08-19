@@ -8,7 +8,8 @@ Guidance for working in this repository.
 the code is meant to be *read*: clarity, structure, and comments that explain
 reasoning matter as much as behaviour.
 
-Shipped: a Texas Hold'em equity calculator with persistent history.
+Shipped: a Texas Hold'em equity calculator with persistent history, and a
+range explorer for range-vs-hand and range-vs-range equity.
 Next up: a hand simulator, then a session tracker (see [Roadmap](#roadmap)).
 
 ## Commands
@@ -152,6 +153,33 @@ there are ≤ 200,000 of them (river = 1, turn = 44, flop = 990) and samples wit
 seeded RNG otherwise (preflop = 1,712,304). The `method` field reports which was
 used — surface it in any UI, because "exact" and "sampled" are different claims.
 
+A **hand code** (`ranges.js`) is the 169-way shorthand for a class of starting
+hands: `'AA'` (pair), `'AKs'` (suited), `'AKo'` (offsuit) — always high rank
+first; `parseHandCode` rejects `'KAs'` rather than silently correcting it.
+`RANGE_GRID` is the 13x13 layout the UI renders directly: diagonal = pairs,
+above it = suited, below it = offsuit. `expandRangeToCombos` turns a list of
+hand codes into concrete two-card hands, deduplicated and with any combo that
+touches a blocked card removed.
+
+`calculateRangeEquity` (`rangeEquity.js`) is deliberately **not** "call
+`calculateEquity` once per combo pairing" — for two wide ranges that's well
+over a million pairings before a board card is even dealt. Instead it samples
+the whole spot directly each iteration (draw one combo from each side, deal
+the rest of the board, score), so cost stays roughly constant regardless of
+range width. Because of that there is no board-only case small enough to
+enumerate exactly once a range is involved — `method` is always `'sampled'`,
+unlike `calculateEquity`.
+
+`chenScore` (`ranges.js`) is the classic Chen Formula — a deterministic,
+by-hand hand-strength heuristic, not a simulation — used to rank all 169
+hands (`HAND_STRENGTH_ORDER`) for two UI features: the range grid's baseline
+heat-map tint (`HAND_TIER`, computed once at module load since the ranking
+never changes) and the "top X%" range slider (`selectTopPercent`, which adds
+whole hand classes off that ranking until the target combo count is reached
+— it never selects a partial class). If this ever needs to become equity-based
+instead of heuristic, `HAND_STRENGTH_ORDER` is the one thing to replace; both
+consumers read through it rather than recomputing anything themselves.
+
 ## Data store
 
 `DataStore` (abstract) → `JsonFileStore` (JSON files) → `HistoryRepository`
@@ -194,11 +222,37 @@ CDN React. **Revisit when** the component tree grows past comfortable
 development builds). At that point add Vite; the module layout is already
 compatible.
 
-Client structure: `main.js` (bootstrap) → `PokerApp.js` (state) →
+Client structure: `main.js` (bootstrap) → `AppShell.js` (page shell: nav +
+route switch) → `pages/` (one component per route, owns that page's state) →
 `components/` (presentational) + `hooks/` (stateful logic) + `services/`
 (API access). All fetch calls go through `services/apiClient.js`, which
 normalises the server's `{error: {message, details}}` shape into thrown
 `ApiRequestError`s — components only ever handle exceptions.
+
+**Routing.** Two routes (`/` → Odds Calculator, `/ranges` → Range Explorer)
+didn't justify a router dependency, so `router.js` is a ~50-line hand-rolled
+one: a `useRoute()` hook backed by `history.pushState`/`popstate`, and a
+`Link` component that intercepts a plain left click. This is what "minimise
+dependencies" (see Conventions) looks like in practice — reach for a library
+when the hand-written version stops being trivial, not before.
+
+**Shared look and feel.** `public/stylesheets/style.css` opens with a `:root`
+block of design tokens (color, spacing, radii, shadows) that every page's
+classes are built from. Adding a page means composing `.hero-card` /
+`.result-card` / `.ghost-button` and friends with those variables, not
+inventing a new palette — that's what keeps two unrelated features (an odds
+calculator, a range grid) looking like one product.
+
+**Card selection: `CardSlot`.** Every individual card position on both pages
+(a player's hole card, a board street's card, the villain's hand) is its own
+`CardSlot` — a card back until clicked, then a `CardPicker` popover scoped to
+just that one position. State is modeled as fixed-size arrays with `null`
+holes (`players[i]` is always `[card|null, card|null]`), never a
+variable-length array built by pushing cards in pick order — that's what lets
+each position be independently addressable instead of the whole hand sharing
+one shared picker underneath it. Only one popover is open at a time, tracked
+as a single `openSlot` id at the page level; opening a new one implicitly
+closes whatever was open.
 
 ## API
 
@@ -206,6 +260,7 @@ normalises the server's `{error: {message, details}}` shape into thrown
 |---|---|---|
 | `GET` | `/api/health` | Liveness probe |
 | `POST` | `/api/equity` | Calculate equity; records history |
+| `POST` | `/api/ranges/equity` | Range-vs-hand or range-vs-range equity; not recorded to history |
 | `GET` | `/api/history` | Page of records, newest first (`limit`, `offset`, `type`) |
 | `GET` | `/api/history/stats` | Aggregate counts |
 | `GET` | `/api/history/:id` | Single record |

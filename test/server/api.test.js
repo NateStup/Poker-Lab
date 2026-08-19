@@ -127,6 +127,103 @@ describe('POST /api/equity', () => {
   });
 });
 
+describe('POST /api/ranges/equity', () => {
+  it('calculates equity for a range against a specific hand', async () => {
+    const { status, body } = await api('/api/ranges/equity', {
+      method: 'POST',
+      body: JSON.stringify({
+        heroRange: ['AA'],
+        villain: { cards: ['Kd', 'Kc'] },
+        iterations: 2000,
+        seed: 'api-test'
+      })
+    });
+
+    assert.equal(status, 200);
+    assert.equal(body.method, 'sampled');
+    assert.ok(body.hero.equity > body.villain.equity, 'aces should be ahead of kings');
+    assert.equal(body.villain.comboCount, 1);
+  });
+
+  it('calculates equity for a range against a range', async () => {
+    const { status, body } = await api('/api/ranges/equity', {
+      method: 'POST',
+      body: JSON.stringify({
+        heroRange: ['AA', 'KK'],
+        villain: { hands: ['QQ', 'JJ'] },
+        iterations: 2000,
+        seed: 'api-test-range'
+      })
+    });
+
+    assert.equal(status, 200);
+    assert.equal(body.hero.comboCount, 12);
+    assert.equal(body.villain.comboCount, 12);
+    assert.ok(Math.abs(body.hero.equity + body.villain.equity - 1) < 1e-9);
+  });
+
+  it('honours a seed so a run can be replayed', async () => {
+    const payload = JSON.stringify({
+      heroRange: ['AKs', 'AKo'],
+      villain: { hands: ['QQ'] },
+      iterations: 1500,
+      seed: 'fixed-range'
+    });
+
+    const first = await api('/api/ranges/equity', { method: 'POST', body: payload });
+    const second = await api('/api/ranges/equity', { method: 'POST', body: payload });
+
+    assert.equal(first.body.hero.equity, second.body.hero.equity);
+  });
+
+  it('does not add a history record', async () => {
+    const before = await api('/api/history/stats');
+
+    await api('/api/ranges/equity', {
+      method: 'POST',
+      body: JSON.stringify({ heroRange: ['AA'], villain: { cards: ['Kd', 'Kc'] }, iterations: 500 })
+    });
+
+    const after = await api('/api/history/stats');
+    assert.equal(after.body.total, before.body.total);
+  });
+
+  it('rejects a missing hero range', async () => {
+    const { status, body } = await api('/api/ranges/equity', {
+      method: 'POST',
+      body: JSON.stringify({ villain: { cards: ['Kd', 'Kc'] } })
+    });
+
+    assert.equal(status, 400);
+    assert.equal(body.error.code, 'BAD_REQUEST');
+    assert.ok(body.error.details.length > 0);
+  });
+
+  it('rejects an invalid hand code and says which one', async () => {
+    const { status, body } = await api('/api/ranges/equity', {
+      method: 'POST',
+      body: JSON.stringify({ heroRange: ['AA', 'nope'], villain: { cards: ['Kd', 'Kc'] } })
+    });
+
+    assert.equal(status, 400);
+    assert.ok(body.error.details.some(detail => detail.includes('nope')));
+  });
+
+  it('reports 422 when blocked cards eliminate every hero combo', async () => {
+    const { status, body } = await api('/api/ranges/equity', {
+      method: 'POST',
+      body: JSON.stringify({
+        heroRange: ['AA'],
+        villain: { cards: ['Kd', 'Kc'] },
+        dead: ['As', 'Ah', 'Ad', 'Ac']
+      })
+    });
+
+    assert.equal(status, 422);
+    assert.equal(body.error.code, 'UNPROCESSABLE');
+  });
+});
+
 describe('/api/history', () => {
   it('returns the records created by earlier calculations', async () => {
     const { status, body } = await api('/api/history');

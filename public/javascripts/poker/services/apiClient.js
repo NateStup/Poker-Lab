@@ -69,6 +69,16 @@ export function calculateEquity(payload) {
 }
 
 /**
+ * Calculate equity for a hero range against a specific hand or another range.
+ * @param {{heroRange: string[], villain: {cards: string[]}|{hands: string[]},
+ *   board?: string[], dead?: string[], iterations?: number, seed?: number|string}} payload
+ * @returns {Promise<object>}
+ */
+export function calculateRangeEquity(payload) {
+  return request('/api/ranges/equity', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+/**
  * Fetch a page of calculation history, newest first.
  * @param {{limit?: number, offset?: number, type?: string}} [query]
  * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}

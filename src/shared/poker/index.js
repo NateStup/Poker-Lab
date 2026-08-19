@@ -12,5 +12,7 @@ export * from './cards.js';
 export * from './deck.js';
 export * from './equity.js';
 export * from './handEvaluator.js';
+export * from './rangeEquity.js';
+export * from './ranges.js';
 export * from './rng.js';
 export * from './validation.js';

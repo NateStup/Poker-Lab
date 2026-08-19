@@ -11,6 +11,7 @@
 
 import { BOARD_SIZE, HOLE_CARD_COUNT, findDuplicateCards, isValidCard, normalizeCard } from './cards.js';
 import { MAX_ITERATIONS, MIN_ITERATIONS } from './equity.js';
+import { isValidHandCode } from './ranges.js';
 
 /** Boards may only be revealed at street boundaries. */
 const LEGAL_BOARD_SIZES = Object.freeze([0, 3, 4, 5]);
@@ -163,6 +164,109 @@ function normalizeIterations(iterations, errors) {
   }
 
   return parsed;
+}
+
+/**
+ * Normalise and validate a range-equity request payload.
+ *
+ * @param {object} payload raw request body
+ * @returns {ValidationResult}
+ */
+export function validateRangeEquityRequest(payload = {}) {
+  const errors = [];
+  const { heroRange, villain, board, dead, iterations, seed } = payload;
+
+  const normalizedHeroRange = normalizeHandList(heroRange, '`heroRange`', errors);
+  const normalizedVillain = normalizeVillain(villain, errors);
+  const normalizedBoard = normalizeCardList(board, 'Board', BOARD_SIZE, errors);
+  const normalizedDead = normalizeCardList(dead, 'Dead cards', 52, errors);
+
+  if (normalizedBoard && !LEGAL_BOARD_SIZES.includes(normalizedBoard.length)) {
+    errors.push(`Board must contain 0, 3, 4, or ${BOARD_SIZE} cards (received ${normalizedBoard.length}).`);
+  }
+
+  if (normalizedVillain?.cards && normalizedBoard && normalizedDead) {
+    const duplicates = findDuplicateCards(normalizedVillain.cards, normalizedBoard, normalizedDead);
+    if (duplicates.length > 0) {
+      errors.push(`Each card may only be used once. Duplicated: ${duplicates.join(', ')}.`);
+    }
+  }
+
+  const normalizedIterations = normalizeIterations(iterations, errors);
+
+  if (errors.length > 0) {
+    return { valid: false, errors, value: null };
+  }
+
+  return {
+    valid: true,
+    errors: [],
+    value: {
+      heroRange: normalizedHeroRange,
+      villain: normalizedVillain,
+      board: normalizedBoard,
+      dead: normalizedDead,
+      iterations: normalizedIterations,
+      seed: typeof seed === 'string' || typeof seed === 'number' ? seed : undefined
+    }
+  };
+}
+
+/**
+ * @param {unknown} hands
+ * @param {string} label used in error messages
+ * @param {string[]} errors collected in place
+ * @returns {string[]|null}
+ */
+function normalizeHandList(hands, label, errors) {
+  if (!Array.isArray(hands) || hands.length === 0) {
+    errors.push(`${label} must be a non-empty array of hand codes.`);
+    return null;
+  }
+
+  const invalid = hands.filter(hand => !isValidHandCode(hand));
+  if (invalid.length > 0) {
+    errors.push(`${label} has invalid hand codes: ${invalid.map(hand => JSON.stringify(hand)).join(', ')}.`);
+    return null;
+  }
+
+  return hands;
+}
+
+/**
+ * @param {unknown} villain
+ * @param {string[]} errors collected in place
+ * @returns {{cards: string[]}|{hands: string[]}|null}
+ */
+function normalizeVillain(villain, errors) {
+  if (!villain || typeof villain !== 'object' || Array.isArray(villain)) {
+    errors.push('`villain` must be an object with either `cards` (a specific hand) or `hands` (a range).');
+    return null;
+  }
+
+  if (Array.isArray(villain.cards)) {
+    if (villain.cards.length !== HOLE_CARD_COUNT) {
+      errors.push(`\`villain.cards\` must have exactly ${HOLE_CARD_COUNT} cards.`);
+      return null;
+    }
+
+    const cards = villain.cards.map(normalizeCard);
+    const invalid = villain.cards.filter((_, i) => !cards[i]);
+    if (invalid.length > 0) {
+      errors.push(`\`villain.cards\` has invalid cards: ${invalid.map(card => JSON.stringify(card)).join(', ')}.`);
+      return null;
+    }
+
+    return { cards };
+  }
+
+  if (Array.isArray(villain.hands)) {
+    const hands = normalizeHandList(villain.hands, '`villain.hands`', errors);
+    return hands ? { hands } : null;
+  }
+
+  errors.push('`villain` must provide either `cards` or `hands`.');
+  return null;
 }
 
 /**

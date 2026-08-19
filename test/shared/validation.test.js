@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { validateEquityRequest } from '../../src/shared/poker/validation.js';
+import { validateEquityRequest, validateRangeEquityRequest } from '../../src/shared/poker/validation.js';
 
 describe('validateEquityRequest', () => {
   it('accepts a minimal valid request', () => {
@@ -112,5 +112,119 @@ describe('validateEquityRequest', () => {
 
     assert.equal(valid, false);
     assert.ok(errors.length >= 3, `expected several errors, got ${errors.length}`);
+  });
+});
+
+describe('validateRangeEquityRequest', () => {
+  it('accepts a hero range against a specific villain hand', () => {
+    const { valid, value } = validateRangeEquityRequest({
+      heroRange: ['AA', 'AKs'],
+      villain: { cards: ['kd', 'kc'] }
+    });
+
+    assert.equal(valid, true);
+    assert.deepEqual(value.heroRange, ['AA', 'AKs']);
+    assert.deepEqual(value.villain, { cards: ['Kd', 'Kc'] });
+    assert.deepEqual(value.board, []);
+  });
+
+  it('accepts a hero range against a villain range', () => {
+    const { valid, value } = validateRangeEquityRequest({
+      heroRange: ['AA'],
+      villain: { hands: ['KK', 'QQ'] }
+    });
+
+    assert.equal(valid, true);
+    assert.deepEqual(value.villain, { hands: ['KK', 'QQ'] });
+  });
+
+  it('rejects a missing or empty hero range', () => {
+    const { valid, errors } = validateRangeEquityRequest({ villain: { cards: ['Kd', 'Kc'] } });
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /heroRange/.test(error)));
+
+    assert.equal(
+      validateRangeEquityRequest({ heroRange: [], villain: { cards: ['Kd', 'Kc'] } }).valid,
+      false
+    );
+  });
+
+  it('rejects a hero range with an invalid hand code', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['AA', 'not-a-hand'],
+      villain: { cards: ['Kd', 'Kc'] }
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /invalid hand codes/.test(error)));
+  });
+
+  it('rejects a non-canonical hand code (wrong rank order)', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['KAs'],
+      villain: { cards: ['Kd', 'Kc'] }
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /invalid hand codes/.test(error)));
+  });
+
+  it('rejects a missing villain', () => {
+    const { valid, errors } = validateRangeEquityRequest({ heroRange: ['AA'] });
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /villain/.test(error)));
+  });
+
+  it('rejects villain.cards without exactly two cards', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['AA'],
+      villain: { cards: ['Kd'] }
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /villain\.cards/.test(error)));
+  });
+
+  it('rejects villain.hands with an invalid hand code', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['AA'],
+      villain: { hands: ['zz'] }
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /villain\.hands/.test(error)));
+  });
+
+  it('rejects a villain card shared with the board', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['AA'],
+      villain: { cards: ['Kd', 'Kc'] },
+      board: ['Kd', '7d', '9h']
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /only be used once/.test(error)));
+  });
+
+  it('rejects a board that is not at a street boundary', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['AA'],
+      villain: { cards: ['Kd', 'Kc'] },
+      board: ['2c', '7d']
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /0, 3, 4, or 5/.test(error)));
+  });
+
+  it('rejects an out-of-range iteration count', () => {
+    const { valid, errors } = validateRangeEquityRequest({
+      heroRange: ['AA'],
+      villain: { cards: ['Kd', 'Kc'] },
+      iterations: 99_999_999
+    });
+
+    assert.equal(valid, false);
+    assert.ok(errors.some(error => /iterations/.test(error)));
   });
 });
