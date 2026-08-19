@@ -11,9 +11,11 @@ const e = React.createElement;
 
 /**
  * A single card rendered as a coloured chip.
- * @param {{card: string}} props
+ * @param {{card: string, size?: 'sm'|'lg'}} props `size: 'lg'` is used inside
+ *   a `CardSlot`, where the card fills a face-up-card-sized box rather than
+ *   sitting inline in a line of text.
  */
-export function CardBadge({ card }) {
+export function CardBadge({ card, size = 'sm' }) {
   if (!isValidCard(card)) {
     return e('span', { className: 'card-chip card-chip-unknown' }, '?');
   }
@@ -22,7 +24,10 @@ export function CardBadge({ card }) {
 
   return e(
     'span',
-    { className: `card-chip suit-${suit.color}`, title: `${card[0]} of ${suit.label}` },
+    {
+      className: `card-chip suit-${suit.color} ${size === 'lg' ? 'card-chip-lg' : ''}`,
+      title: `${card[0]} of ${suit.label}`
+    },
     e('span', { className: 'card-chip-rank' }, card[0]),
     e('span', { className: 'card-chip-suit' }, suit.symbol)
   );

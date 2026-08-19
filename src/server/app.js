@@ -17,7 +17,9 @@ import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { createApiRouter } from './routes/index.js';
 import { EquityService } from './services/EquityService.js';
-import { createHistoryRepository } from './store/index.js';
+import { RangeService } from './services/RangeService.js';
+import { TournamentService } from './services/TournamentService.js';
+import { createHistoryRepository, createTournamentRepository } from './store/index.js';
 
 /**
  * Build a fully wired Express app.
@@ -26,12 +28,17 @@ import { createHistoryRepository } from './store/index.js';
  * @param {import('./store/HistoryRepository.js').HistoryRepository} [options.historyRepository]
  *   inject a repository (tests pass one backed by a temp directory); a
  *   configured one is created when omitted
+ * @param {import('./store/TournamentRepository.js').TournamentRepository} [options.tournamentRepository]
+ *   same, for tournaments
  * @returns {Promise<import('express').Express>} the app, with `locals.historyRepository`
- *   set so callers can close the store on shutdown
+ *   and `locals.tournamentRepository` set so callers can close the stores on shutdown
  */
-export async function createApp({ historyRepository } = {}) {
+export async function createApp({ historyRepository, tournamentRepository } = {}) {
   const repository = historyRepository || await createHistoryRepository();
+  const tournamentRepo = tournamentRepository || await createTournamentRepository();
   const equityService = new EquityService({ historyRepository: repository });
+  const rangeService = new RangeService();
+  const tournamentService = new TournamentService({ tournamentRepository: tournamentRepo });
 
   const app = express();
 
@@ -56,7 +63,7 @@ export async function createApp({ historyRepository } = {}) {
 
   app.use(express.static(config.paths.public));
 
-  app.use('/api', createApiRouter({ equityService, historyRepository: repository }));
+  app.use('/api', createApiRouter({ equityService, rangeService, tournamentService, historyRepository: repository }));
 
   // Any non-API path falls through to the single-page app, so client-side
   // routing works on a hard refresh. API 404s are still real 404s.
@@ -68,6 +75,7 @@ export async function createApp({ historyRepository } = {}) {
   app.use(errorHandler);
 
   app.locals.historyRepository = repository;
+  app.locals.tournamentRepository = tournamentRepo;
 
   return app;
 }

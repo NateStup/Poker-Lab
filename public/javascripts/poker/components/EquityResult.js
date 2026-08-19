@@ -16,12 +16,43 @@ function percent(value) {
 }
 
 /**
+ * @param {object} outs a `calculateOuts` result
+ * @returns {*}
+ */
+function OutsSection(outs) {
+  return e(
+    'div',
+    { className: 'outs-section' },
+    e('h4', null, 'Outs'),
+    e('p', { className: 'footnote' }, 'Cards that improve each player to win (or chop) on the very next card.'),
+    outs.players.map(entry =>
+      e(
+        'div',
+        { key: entry.index, className: 'outs-row' },
+        e(
+          'div',
+          { className: 'equity-row-head' },
+          e('span', { className: 'stat-label' }, `Player ${entry.index + 1}`),
+          e('span', { className: 'footnote' },
+            `${entry.outs} of ${outs.unseenCount} (${percent(entry.percent)})`)
+        ),
+        entry.outs > 0
+          ? e(CardList, { cards: [...entry.winCards, ...entry.tieCards] })
+          : e('span', { className: 'preview-placeholder' }, 'No outs')
+      )
+    )
+  );
+}
+
+/**
  * @param {object} props
  * @param {object|null} props.result
+ * @param {object|null} [props.outs] a `calculateOuts` result, when applicable
+ *   (heads-up with a flop or turn board) -- omitted otherwise
  * @param {boolean} props.isLoading
  * @param {{message: string, details?: string[]}|null} props.error
  */
-export function EquityResult({ result, isLoading, error }) {
+export function EquityResult({ result, outs, isLoading, error }) {
   if (error) {
     return e(
       'div',
@@ -93,6 +124,7 @@ export function EquityResult({ result, isLoading, error }) {
         )
       )
     ),
+    outs ? OutsSection(outs) : null,
     e(
       'p',
       { className: 'footnote' },
