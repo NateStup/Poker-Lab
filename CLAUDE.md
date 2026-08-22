@@ -584,6 +584,50 @@ denomination does. Forced bets carry no caption at all: chips in front of a
 seat that hasn't acted are self-evidently a blind, and labelling them put a
 word on every seat on every preflop frame.
 
+**The pot is chips, not a caption.** The middle of the felt draws a
+`ChipStack` with the amount beside it, and no "Pot" label — the word was
+naming what the picture already says. Nothing renders at zero, because an
+empty middle is empty rather than a stack worth nothing, and the replayer's
+caption no longer repeats the figure a centimetre below the felt. `ChipStack`
+is `aria-hidden` (it is a drawing), so "Pot:" survives in a
+`.visually-hidden` span — that utility class exists for exactly this: a
+picture carrying the meaning on screen while the word stays for a screen
+reader.
+
+**Chips being pushed in is animated, and makes a noise.** Stepping forward
+into a frame where the felt in front of every seat empties is the dealer's
+sweep, and `PokerTable` flies a chip from each seat's bet position to the
+centre for it (`sweepBets`, `CHIP_SWEEP_MS`). Three things about it:
+
+- **Who decides versus who draws.** *When* a sweep happens is a fact about
+  stepping through a replay, so `HandReplay` detects it — "there were chips
+  out, now there are none", which identifies `collectStreet` exactly without
+  special-casing streets. *Where* chips travel is geometry, so the animation
+  lives next to it in `PokerTable`. The chips are mounted only while a sweep
+  runs, so mounting starts the animation and unmounting ends it — no
+  `animationend` listener, nothing to reset. The clearing timeout reads
+  `chipSweepDurationMs`, the same function the stagger does, so a chip is
+  never un-rendered mid-flight.
+- **Only a single step forward animates.** Scrubbing or jumping would fire
+  several sweeps at once on the way past. Note the matching hazard: the effect's
+  cleanup cancels the pending timer, so any non-sweep step has to clear the
+  chips itself or they strand on the felt.
+- **A sweep moves chips; it never changes the pot.** A frame's `pot` already
+  counts chips sitting in front of seats, so the number is identical either
+  side of a sweep. A checked-through street sweeps nothing and correctly
+  animates nothing.
+
+The sound (`services/chipSounds.js`) is synthesised with Web Audio rather than
+shipped as an audio file — the same dependency call the rest of the app makes,
+and nothing loads on a page that never plays one. A chip click is bandpassed
+noise with a near-instant attack and a ~60ms exponential tail; a sweep is a
+few of those staggered, because several chips landing slightly apart *is* the
+effect. The `AudioContext` is built on the first sweep, not at import: one
+constructed at page load is born `suspended` and silently drops its first
+sound. Muting persists in `localStorage`, and the toggle's speaker is an
+inline SVG for the reason the suit pips are — a glyph is one font
+substitution from being a colour emoji.
+
 The chips are **SVG, not styled `div`s** — same reason as the logo and the back
 arrow. A chip is a shape (an ellipse seen from across the table, with a side
 wall under it), and CSS can only fake that by overlapping circles, which is
@@ -627,7 +671,15 @@ board, chips, stacks and folds. The component holds one piece of state — which
 frame — and does no arithmetic of its own; everything it shows comes out of the
 shared domain. That split is deliberate: a replayer that recomputed the pot as
 it stepped would be the second betting implementation this codebase keeps
-warning about.
+warning about. It holds two further pieces of purely visual state — which
+chips are mid-sweep, and whether sound is muted — neither of which any
+number on the page is derived from.
+
+**Motion is always confirmation, never information.** Everything animated
+here restates something the frame already shows, so
+`prefers-reduced-motion: reduce` switches it off with nothing lost. Honour
+that on anything added later; it is the whole reason the rule is cheap to
+keep.
 
 **View-only shared hands.** View-only is for the person a hand was *shared
 with*, and nobody else. Two conditions have to line up for it: the link says

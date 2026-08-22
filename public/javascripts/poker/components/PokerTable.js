@@ -49,6 +49,19 @@ const TABLE_SHAPE = Object.freeze({
 const BET_RING_SCALE = 0.56;
 
 /**
+ * How long a chip takes to travel from a seat to the middle.
+ *
+ * Exported because the caller has to un-render the flying chips when they
+ * arrive, and a duration defined once here but timed out separately there is
+ * two numbers free to drift. The stylesheet gets it too -- inline, off this
+ * constant -- so all three agree by construction rather than by upkeep.
+ */
+export const CHIP_SWEEP_MS = 520;
+
+/** Stagger between one seat's chips leaving and the next's. */
+const CHIP_SWEEP_STAGGER_MS = 45;
+
+/**
  * Chip-label wording per action type.
  *
  * `post` is deliberately absent: a blind or an ante needs no caption, because
@@ -174,6 +187,12 @@ function betLabelText({ type, amount }) {
  *   0 to 1, shown beside that seat's cards during an all-in run-out
  * @param {number} [props.bigBlind] the hand's big blind, which is the unit a
  *   wager's chip stack is sized in; omit and every wager draws a single chip
+ * @param {number[]|null} [props.sweepBets] chips currently in flight from each
+ *   seat to the middle. Purely a visual: the caller decides a sweep happened
+ *   and clears this after `CHIP_SWEEP_MS`, because *when* chips move is a fact
+ *   about stepping through a replay, which this diagram knows nothing about.
+ *   What it does own is *where* they move, which is why the animation is here
+ *   next to the geometry rather than in the player.
  */
 export function PokerTable({
   seats,
@@ -191,7 +210,8 @@ export function PokerTable({
   actingSeat = null,
   revealSeats = null,
   equityBySeat = null,
-  bigBlind = 0
+  bigBlind = 0,
+  sweepBets = null
 }) {
   const isInteractive = typeof onSelectSeat === 'function';
   const isNarrow = useMediaQuery('(max-width: 640px)');
@@ -228,12 +248,26 @@ export function PokerTable({
             { className: 'poker-table-board' },
             board.map((card, index) => e(PlayingCard, { key: `${card}-${index}`, card, size: 'md' }))
           ),
-          pot !== undefined
+          // Chips, not the word "Pot". What is in the middle of a table is a
+          // pile of chips with an amount -- the label was naming something
+          // the picture already says. Nothing is drawn at zero, because an
+          // empty middle is empty, not a stack worth no chips.
+          //
+          // `ChipStack` is `aria-hidden` (it is a drawing), so the word has to
+          // survive for a screen reader even though it is gone from the felt.
+          pot !== undefined && pot > 0
             ? e(
                 'div',
-                { className: 'poker-table-pot' },
-                e('span', { className: 'stat-label' }, 'Pot'),
-                e('strong', null, pot.toLocaleString())
+                {
+                  className: `poker-table-pot ${sweepBets ? 'is-collecting' : ''}`,
+                  // Same constant the chips fly on, so the nudge lands with
+                  // them rather than drifting against a second number in CSS.
+                  style: sweepBets ? { animationDuration: `${CHIP_SWEEP_MS}ms` } : undefined
+                },
+                e(ChipStack, { amount: pot, bigBlind }),
+                e('strong', null,
+                  e('span', { className: 'visually-hidden' }, 'Pot: '),
+                  pot.toLocaleString())
               )
             : null
         )
@@ -324,8 +358,60 @@ export function PokerTable({
             )
           : null
       );
-    })
+    }),
+
+    // Chips in flight. These start where that seat's bet was sitting and are
+    // animated to the felt's centre by the stylesheet; they exist only while
+    // the caller says a sweep is happening, so mounting them *is* the trigger
+    // and there is no animation to restart or reset. Decorative throughout --
+    // every number they represent is already on the felt somewhere.
+    // The stagger counts seats that actually have chips, not seat numbers: a
+    // lone bet from seat 9 should leave immediately, not sit still for nine
+    // seats' worth of delay first. `chipSweepDurationMs` counts the same way.
+    movingBets(sweepBets).map(({ amount, index, ordinal }) =>
+      e(
+        'span',
+        {
+          key: index,
+          className: 'poker-table-sweep-chip',
+          'aria-hidden': 'true',
+          style: {
+            ...toCss(
+              scalePoint(stadiumPoint(index / seats.length, shape.halfWidth, shape.halfHeight), BET_RING_SCALE),
+              shape.aspect
+            ),
+            animationDuration: `${CHIP_SWEEP_MS}ms`,
+            animationDelay: `${ordinal * CHIP_SWEEP_STAGGER_MS}ms`
+          }
+        },
+        e(ChipStack, { amount, bigBlind })
+      ))
   );
+}
+
+/**
+ * The seats with chips to sweep, tagged with their place in the queue.
+ * @param {number[]|null} bets
+ * @returns {Array<{amount: number, index: number, ordinal: number}>}
+ */
+function movingBets(bets) {
+  if (!bets) return [];
+  return bets
+    .map((amount, index) => ({ amount, index }))
+    .filter(entry => entry.amount > 0)
+    .map((entry, ordinal) => ({ ...entry, ordinal }));
+}
+
+/**
+ * How long a whole sweep takes, last chip included -- what the caller waits
+ * before clearing `sweepBets`. Reads the stagger the same way the render
+ * does, so a chip can't be un-rendered mid-flight.
+ *
+ * @param {number[]|null} bets
+ * @returns {number} milliseconds
+ */
+export function chipSweepDurationMs(bets) {
+  return CHIP_SWEEP_MS + Math.max(0, movingBets(bets).length - 1) * CHIP_SWEEP_STAGGER_MS;
 }
 
 /**

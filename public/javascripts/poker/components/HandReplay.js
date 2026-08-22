@@ -20,9 +20,10 @@ import {
   isRunoutSpot,
   runoutEquity
 } from '/shared/handLog/index.js';
+import { isChipSoundMuted, playChipSweep, setChipSoundMuted } from '../services/chipSounds.js';
 import { AllInEquity } from './AllInEquity.js';
 import { PlayingCard } from './PlayingCard.js';
-import { PokerTable } from './PokerTable.js';
+import { PokerTable, chipSweepDurationMs } from './PokerTable.js';
 import { ShowdownResult } from './ShowdownResult.js';
 
 const e = React.createElement;
@@ -41,6 +42,75 @@ const ACTION_VERBS = Object.freeze({
 /** @param {number} amount @returns {string} */
 function formatChips(amount) {
   return amount.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/**
+ * Did the step from one frame to the next push the street's chips into the
+ * middle?
+ *
+ * The dealer's sweep is the only thing that empties the felt in front of every
+ * seat at once (`collectStreet` in `replay.js`, run before each new street is
+ * dealt and again before the settle), so "there were chips out, and now there
+ * are none" identifies it exactly, with no need to special-case which street
+ * or which kind of frame is arriving.
+ *
+ * Note the pot total does *not* change across a sweep -- a frame's `pot`
+ * already counts chips sitting in front of seats. The sweep moves chips; it
+ * never changes what the hand is worth.
+ *
+ * @param {object} before
+ * @param {object} after
+ * @returns {boolean}
+ */
+function isSweep(before, after) {
+  return before.bets.some(bet => bet > 0) && after.bets.every(bet => bet === 0);
+}
+
+/**
+ * The speaker, drawn rather than typed.
+ *
+ * A glyph would be one font substitution away from a colour emoji -- the same
+ * trap the suit pips and the back arrow already document. An icon that changes
+ * shape per machine is not an icon.
+ *
+ * @param {object} props
+ * @param {boolean} props.muted
+ */
+function SoundToggle({ muted, onToggle }) {
+  return e(
+    'button',
+    {
+      type: 'button',
+      className: 'ghost-button hand-replay-sound',
+      onClick: onToggle,
+      'aria-pressed': muted,
+      'aria-label': muted ? 'Turn chip sounds on' : 'Turn chip sounds off',
+      title: muted ? 'Chip sounds off' : 'Chip sounds on'
+    },
+    e(
+      'svg',
+      { viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': 'true', focusable: 'false' },
+      e('path', {
+        d: 'M4 9v6h4l5 4V5L8 9H4z',
+        fill: 'currentColor'
+      }),
+      muted
+        ? e('path', {
+            d: 'M16 9l5 6M21 9l-5 6',
+            stroke: 'currentColor',
+            strokeWidth: 2,
+            strokeLinecap: 'round',
+            fill: 'none'
+          })
+        : e('path', {
+            d: 'M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12',
+            stroke: 'currentColor',
+            strokeWidth: 2,
+            strokeLinecap: 'round',
+            fill: 'none'
+          })
+    )
+  );
 }
 
 /**
@@ -123,6 +193,51 @@ export function HandReplay({ hand, positions }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [frames.length]);
 
+  // Chips in flight, and the preference for whether that makes a noise.
+  const [sweepBets, setSweepBets] = React.useState(null);
+  const [muted, setMuted] = React.useState(isChipSoundMuted);
+  const previousIndex = React.useRef(index);
+
+  React.useEffect(() => {
+    const from = previousIndex.current;
+    previousIndex.current = index;
+
+    // Only a single step forward. Scrubbing, jumping to the end, or stepping
+    // back all change the table without anyone pushing chips anywhere, and
+    // animating those would fire several sweeps at once on the way past.
+    //
+    // Clearing on the way out matters as much as setting: this effect's
+    // cleanup cancels the pending timer, so a step taken *during* a sweep
+    // would otherwise strand the chips on the felt with nothing left to
+    // un-render them.
+    if (index !== from + 1 || !isSweep(frames[from], frames[index])) {
+      setSweepBets(null);
+      return undefined;
+    }
+
+    const bets = frames[from].bets;
+    setSweepBets(bets);
+    // Counted in stacks moving, not chips: that is what the rattle is of.
+    playChipSweep(bets.filter(bet => bet > 0).length);
+
+    // Un-rendering the chips is what ends the animation -- see `sweepBets` on
+    // `PokerTable`. The wait comes from the same function the stagger does, so
+    // the last chip is never cut off mid-flight.
+    const timer = setTimeout(() => setSweepBets(null), chipSweepDurationMs(bets));
+    return () => clearTimeout(timer);
+  }, [index, frames]);
+
+  // A hand swapped underneath the player leaves chips flying between two
+  // tables that no longer relate to each other.
+  React.useEffect(() => setSweepBets(null), [hand]);
+
+  function toggleMuted() {
+    setMuted(current => {
+      setChipSoundMuted(!current);
+      return !current;
+    });
+  }
+
   const isFirst = index === 0;
   const isLast = index === frames.length - 1;
   const streetNotes = frame.kind === 'result' ? '' : hand.streets[frame.street].notes;
@@ -204,7 +319,8 @@ export function HandReplay({ hand, positions }) {
       actingSeat: frame.actingSeat,
       revealSeats,
       equityBySeat,
-      bigBlind: hand.format.bigBlind
+      bigBlind: hand.format.bigBlind,
+      sweepBets
     }),
 
     e(
@@ -234,7 +350,8 @@ export function HandReplay({ hand, positions }) {
       e('button', {
         type: 'button', className: 'ghost-button', onClick: () => goTo(frames.length - 1), disabled: isLast,
         'aria-label': 'Jump to the end'
-      }, '>|')
+      }, '>|'),
+      e(SoundToggle, { muted, onToggle: toggleMuted })
     ),
 
     e(
@@ -244,8 +361,11 @@ export function HandReplay({ hand, positions }) {
       frame.kind === 'deal' && frame.dealt.length > 0
         ? e('span', { className: 'playing-card-row' },
             frame.dealt.map(card => e(PlayingCard, { key: card, card, size: 'sm' })))
-        : null,
-      e('span', { className: 'footnote' }, `Pot ${formatChips(frame.pot)}`)
+        : null
+      // No "Pot 1,200" line here any more: the felt shows the pot as chips
+      // with the amount beside them, and repeating it a centimetre below was
+      // the same number twice. The timeline still carries a pot per step,
+      // which is for scanning the hand rather than reading this moment.
     ),
 
     equity
