@@ -17,6 +17,7 @@
  */
 
 import { ALL_HANDS, TOTAL_COMBOS, rangeComboCount, selectTopPercent } from '/shared/poker/ranges.js';
+import { clearBoardCard } from '../boardSlots.js';
 import { CardSlot } from '../components/CardSlot.js';
 import { RangeEquityResult } from '../components/RangeEquityResult.js';
 import { RangeGrid } from '../components/RangeGrid.js';
@@ -81,21 +82,26 @@ export function RangeExplorerPage() {
 
   /**
    * @param {string} slotId
-   * @param {string} card
+   * @param {string|null} card the chosen card, or `null` to empty the slot
    */
   function pickCard(slotId, card) {
     const [kind, iStr] = slotId.split('-');
     const i = Number(iStr);
 
     if (kind === 'villain') {
-      setVillainCards(prev => prev.map((c, idx) => (idx === i ? (c === card ? null : card) : c)));
+      setVillainCards(prev => prev.map((c, idx) => (idx === i ? card : c)));
       return;
     }
 
-    setBoard(prev => ({
-      ...prev,
-      [kind]: prev[kind].map((c, idx) => (idx === i ? (c === card ? null : card) : c))
-    }));
+    // Emptying a board card clears the streets after it too -- see
+    // boardSlots.js: this page flattens the board the same way, so it has the
+    // same silent mis-read to avoid.
+    if (card === null) {
+      setBoard(prev => clearBoardCard(prev, kind, i));
+      return;
+    }
+
+    setBoard(prev => ({ ...prev, [kind]: prev[kind].map((c, idx) => (idx === i ? card : c)) }));
   }
 
   /**
