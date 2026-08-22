@@ -91,6 +91,17 @@ function chipsInMiddle(frame) {
 }
 
 /**
+ * Read at the moment of a sweep rather than subscribed to: this only decides
+ * whether one animation runs, and a change part-way through a replay can wait
+ * until the next step.
+ * @returns {boolean}
+ */
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/**
  * The speaker, drawn rather than typed.
  *
  * A glyph would be one font substitution away from a colour emoji -- the same
@@ -224,7 +235,19 @@ export function HandReplay({ hand, positions }) {
   const [muted, setMuted] = React.useState(isChipSoundMuted);
   const previousIndex = React.useRef(index);
 
-  React.useEffect(() => {
+  // `useLayoutEffect`, emphatically not `useEffect`.
+  //
+  // A plain effect runs *after* the browser has painted, and by then the new
+  // frame is already on screen -- the flop dealt, the pot grown. Setting the
+  // sweep a moment later then rolled the table back to the previous frame for
+  // the length of the animation and forward again at the end, so the flop
+  // appeared, vanished and returned. That flash was the whole bug: the chips
+  // were flying the entire time, underneath a table that had already shown
+  // the answer and taken it away.
+  //
+  // A layout effect runs before paint, so the frame that would have flashed
+  // is never presented at all.
+  React.useLayoutEffect(() => {
     const from = previousIndex.current;
     previousIndex.current = index;
 
@@ -242,9 +265,19 @@ export function HandReplay({ hand, positions }) {
     }
 
     const bets = frames[from].bets;
-    setSweep({ bets, from: frames[from] });
     // Counted in stacks moving, not chips: that is what the rake is of.
     playChipSweep(bets.filter(bet => bet > 0).length);
+
+    // Nothing is held back for someone who has asked for less motion: the
+    // sweep exists to show chips travelling, and with the travel removed all
+    // that is left is a second of the table sitting on the previous frame for
+    // no visible reason. They get the new frame immediately, and still hear it.
+    if (prefersReducedMotion()) {
+      setSweep(null);
+      return undefined;
+    }
+
+    setSweep({ bets, from: frames[from] });
 
     // Un-rendering the chips is what ends the animation -- see `sweepBets` on
     // `PokerTable`. The wait comes from the same function the stagger does, so

@@ -66,6 +66,20 @@ export const CHIP_SWEEP_MS = 950;
 const CHIP_SWEEP_STAGGER_MS = 70;
 
 /**
+ * Where swept chips come to rest: the pot, not the centre of the felt.
+ *
+ * Measured rather than assumed. `.poker-table-middle` stacks the board above
+ * the pot, which puts the pot below centre (58.8% of the table's height on the
+ * wide layout, 56.5% on the narrow one) and the board above it at ~44%.
+ * Landing chips at a flat 50% ran them straight across the community cards --
+ * cluttered, and the wrong story besides: chips go to the pot, not to the
+ * board. One figure covers both layouts closely enough, and it still points
+ * somewhere sensible when no pot is drawn yet, since an empty middle renders
+ * nothing but the chips still need a destination.
+ */
+const CHIP_SWEEP_TARGET = Object.freeze({ left: '50%', top: '58%' });
+
+/**
  * Chip-label wording per action type.
  *
  * `post` is deliberately absent: a blind or an ante needs no caption, because
@@ -373,24 +387,48 @@ export function PokerTable({
     // The stagger counts seats that actually have chips, not seat numbers: a
     // lone bet from seat 9 should leave immediately, not sit still for nine
     // seats' worth of delay first. `chipSweepDurationMs` counts the same way.
-    movingBets(sweepBets).map(({ amount, index, ordinal }) =>
-      e(
-        'span',
+    movingBets(sweepBets).map(({ amount, index, ordinal }) => {
+      const from = toCss(
+        scalePoint(stadiumPoint(index / seats.length, shape.halfWidth, shape.halfHeight), BET_RING_SCALE),
+        shape.aspect
+      );
+
+      // Deliberately the *same* element a bet is drawn with, plus a modifier.
+      // A flying chip that had its own box could position differently from the
+      // bet it replaces, and the illusion depends entirely on it starting in
+      // exactly the place the bet just was.
+      return e(
+        'div',
         {
           key: index,
-          className: 'poker-table-sweep-chip',
+          className: 'poker-table-bet has-chips is-sweeping',
           'aria-hidden': 'true',
           style: {
-            ...toCss(
-              scalePoint(stadiumPoint(index / seats.length, shape.halfWidth, shape.halfHeight), BET_RING_SCALE),
-              shape.aspect
-            ),
+            ...from,
+            // The keyframes name both ends explicitly and read the start from
+            // here. Leaving the start implicit -- animating only `to` and
+            // letting the browser infer `from` off the inline style -- is
+            // legal but leaves the most important half of the movement to
+            // resolution rules that are easy to get subtly wrong.
+            '--sweep-from-left': from.left,
+            '--sweep-from-top': from.top,
+            '--sweep-to-left': CHIP_SWEEP_TARGET.left,
+            '--sweep-to-top': CHIP_SWEEP_TARGET.top,
             animationDuration: `${CHIP_SWEEP_MS}ms`,
             animationDelay: `${ordinal * CHIP_SWEEP_STAGGER_MS}ms`
           }
         },
-        e(ChipStack, { amount, bigBlind })
-      ))
+        // Chips only, no amount. The figure was already on the felt a moment
+        // ago as the bet, it is about to be on the felt again as the pot, and
+        // in between it is four small numbers sliding across the community
+        // cards. The chips alone carry the movement.
+        e(
+          'span',
+          { className: 'poker-table-bet-chips' },
+          e(ChipStack, { amount, bigBlind })
+        )
+      );
+    })
   );
 }
 

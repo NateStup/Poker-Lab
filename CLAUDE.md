@@ -612,6 +612,20 @@ centre for it (`sweepBets`, `CHIP_SWEEP_MS`). Three things about it:
   several sweeps at once on the way past. Note the matching hazard: the effect's
   cleanup cancels the pending timer, so any non-sweep step has to clear the
   chips itself or they strand on the felt.
+- **It must be `useLayoutEffect`.** This one shipped broken and is worth
+  remembering. A plain `useEffect` runs *after* paint, so the browser showed
+  the new frame — flop dealt, pot grown — and only then did the sweep roll the
+  table back for the length of the animation and forward again at the end. The
+  flop appeared, vanished and returned, and the chips flew the whole time
+  underneath a table that had already given the answer away. Any state that
+  decides *whether the frame just rendered should have been shown at all*
+  belongs in a layout effect.
+- **Chips land on the pot (58% of the table's height), not the felt's
+  centre.** Measured in a browser, not assumed: `.poker-table-middle` stacks
+  the board above the pot, so a flat 50% ran the chips straight across the
+  community cards. They also carry no amount label — the figure is on the felt
+  as a bet a moment before and as the pot a moment after, and in between it is
+  just small numbers sliding over the cards.
 - **The felt draws `chipsInMiddle`, not `frame.pot`.** A frame's `pot` is the
   whole hand's wager *including* chips still in front of seats — right for
   "what is this pot worth", wrong for "what is in the middle", and drawing it
@@ -639,19 +653,23 @@ shipped as an audio file — the same dependency call the rest of the app makes,
 and nothing loads on a page that never plays one. It is a dealer *raking*
 chips in, built in layers:
 
-- **Each chip is a click plus a ring.** The transient is a wide, very short
-  burst — the strike. Under it a narrow, high-Q band rings on several times
-  longer: the disc resonating. The click alone is a stick tapping a table; the
-  ring is what makes it a *chip*, and it is what the first version lacked.
-  Ring pitch is drawn per chip, so a pile clatters inharmonically the way a
-  rack does instead of repeating one note.
-- **A scrape underneath**, wide-band noise with its filter sweeping downward,
-  which reads as a mass moving toward you rather than as static. Kept quiet:
-  when the bed competes with the chips the whole thing turns to hiss.
+- **A chip is a pitched clack, and clacks are oscillators — not noise.** Two
+  earlier versions built this out of filtered noise and both sounded like what
+  they were: a long "shh" with ticks in it. A clay disc is a *struck* object —
+  a very short strike, then the disc ringing at a few frequencies that die in
+  well under a tenth of a second. So a clack is three oscillators at
+  **inharmonic** ratios (a disc is not a string) plus a 6ms noise tick for the
+  strike. Pitch is drawn per clack, which is what makes a pile clatter instead
+  of repeating one note.
+- **There is no sustained noise bed.** Density of clacks is what reads as a
+  mass of chips; a bed loud enough to hear is a bed loud enough to be the hiss
+  this twice turned into.
 - **Density and irregularity carry the atmosphere.** Below roughly a dozen
-  knocks the ear picks them out and counts them, and an even stagger is heard
-  as a rhythm — the one thing a pile of chips never is. So they are many, and
-  scattered at random.
+  knocks the ear picks them out and counts them, and an even spread is heard
+  as a machine. So they are many, and scattered with a squared random so the
+  clatter is thickest as the rake takes hold and thins as chips come to rest.
+- Everything runs through a compressor: two dozen clacks can sum past full
+  scale, and clipping something this bright is a crackle, not a loud chip.
 
 The `AudioContext` is built on the first sweep, not at import: one
 constructed at page load is born `suspended` and silently drops its first
@@ -708,9 +726,20 @@ number on the page is derived from.
 
 **Motion is always confirmation, never information.** Everything animated
 here restates something the frame already shows, so
-`prefers-reduced-motion: reduce` switches it off with nothing lost. Honour
-that on anything added later; it is the whole reason the rule is cheap to
-keep.
+`prefers-reduced-motion: reduce` switches it off with nothing lost — and
+`HandReplay` skips the sweep outright in that case rather than merely hiding
+the chips, since a hidden animation still holds the table on the previous
+frame for a second with nothing to show for it.
+
+**Verify animations in a browser, not by reasoning.** The chip sweep shipped
+broken twice while every unit test passed, because none of what was wrong —
+a flash from an effect running after paint, chips landing on top of the
+community cards — is visible from the domain layer. Both were found in
+minutes by driving Chrome with `playwright-core` (installed outside the repo,
+so no dependency is added), stepping the replay, sampling computed
+`left`/`top` over time, and taking screenshots to actually look at. Do that
+for anything visual: sample the DOM across the animation and read the
+picture. "The logic is right" is not evidence that the screen is.
 
 **View-only shared hands.** View-only is for the person a hand was *shared
 with*, and nobody else. Two conditions have to line up for it: the link says

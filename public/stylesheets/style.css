@@ -150,7 +150,10 @@ body::before {
    (chips being pushed in), never the only way to learn it -- so switching it
    off costs nothing and is honoured wherever it is used. */
 @media (prefers-reduced-motion: reduce) {
-  .poker-table-sweep-chip {
+  /* `HandReplay` already skips the sweep outright in this case, so no chip
+     should ever reach here. Belt and braces: if one did, it must not sit
+     frozen on the felt at its starting position. */
+  .poker-table-bet.is-sweeping {
     display: none;
   }
 
@@ -1595,39 +1598,48 @@ button:disabled {
   100% { transform: scale(1); }
 }
 
-/* Chips travelling from a seat to the middle. Mounted only while a sweep is
-   running, so mounting starts the animation and unmounting ends it -- there is
-   no state to reset and no `animationend` to listen for.
+/* A bet in flight. It is `.poker-table-bet` with a modifier rather than an
+   element of its own, so it starts in precisely the place the bet it replaces
+   was sitting -- the illusion is entirely dependent on that.
 
    `left`/`top` are animated rather than a transform, because the start and end
-   are both container percentages: a percentage `translate` resolves against
-   the chip's own box, which would send a 2rem stack somewhere unrelated to the
-   felt's centre. A handful of elements for half a second is well inside what
-   that costs. */
-.poker-table-sweep-chip {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
+   are both *container* percentages, and a percentage `translate` resolves
+   against the chip's own box instead. A handful of elements for a second is
+   well inside what that costs. */
+.poker-table-bet.is-sweeping {
   z-index: 3;
   animation-name: chip-sweep;
-  /* Dragged, not fired: it takes hold slowly and keeps pulling, rather than
-     launching off the mark the way a standard ease-out does. */
-  animation-timing-function: cubic-bezier(0.55, 0.02, 0.35, 1);
-  /* `both`, so a staggered chip waits at its seat during its delay instead of
-     starting the flight already in progress. */
+  /* Dragged, not fired: it takes hold gradually and keeps pulling, rather
+     than launching off the mark the way a plain ease-out does. */
+  animation-timing-function: cubic-bezier(0.4, 0.05, 0.3, 1);
+  /* `both`, so a staggered chip waits at its seat through its delay instead
+     of starting the journey already part-way along. */
   animation-fill-mode: both;
 }
 
-/* Solid for almost the whole trip, fading only as it reaches the pile -- a
-   chip that dims on the way reads as vanishing rather than as arriving. */
+/* Both ends stated outright. The start comes from custom properties set
+   inline, so nothing here depends on the browser inferring the opening frame
+   from the element's own styles.
+
+   Opacity holds almost the whole way and drops only at the pile: a chip that
+   dims en route reads as vanishing rather than as arriving. */
 @keyframes chip-sweep {
-  0% { opacity: 1; }
-  78% { opacity: 0.95; }
-  100% {
-    left: 50%;
-    top: 50%;
+  from {
+    left: var(--sweep-from-left);
+    top: var(--sweep-from-top);
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  84% {
+    opacity: 1;
+  }
+
+  to {
+    left: var(--sweep-to-left);
+    top: var(--sweep-to-top);
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.8);
+    transform: translate(-50%, -50%) scale(0.72);
   }
 }
 
