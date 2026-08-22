@@ -66,6 +66,7 @@ src/
 public/               Static frontend. Buildless native ES modules + CDN React.
 test/shared/          Domain tests (test/shared/tournament/ mirrors src/shared/tournament/).
 test/server/          Store and end-to-end API tests.
+test/client/          Tests for pure frontend modules (no DOM, no React).
 data/                 JSON data store (contents gitignored).
 ```
 
@@ -299,7 +300,10 @@ id can't interleave and silently lose one's change.
 
 `node:test` with `describe`/`it`. `npm test` discovers `**/*.test.js`.
 
-- Domain tests go in `test/shared/`, server tests in `test/server/`.
+- Domain tests go in `test/shared/`, server tests in `test/server/`. A pure
+  frontend module with no DOM dependency can be tested too — `test/client/`
+  covers `boardSlots.js`, which imports and runs in Node exactly as it does
+  in the browser. There is no test infrastructure for React components.
 - Prefer assertions that are **provable by hand** (a locked-up nut hand is 100%;
   identical boards split 50/50) over published percentages. Where a statistical
   assertion is unavoidable, use a fixed seed and a wide band.
@@ -356,6 +360,30 @@ reserve layout space, so an open picker renders a full-viewport
 existing outside-click handler) — without it, a picker taller than the room
 below its slot visually overlapped nearby buttons and text instead of
 reading as a layer on top of them.
+
+**Emptying a slot is `onPick(null)`.** The picker decides what a click means
+and hands the page a card or a `null`; pages assign whatever they are given
+rather than each re-deriving a toggle. Clearing was technically possible long
+before it was findable — re-clicking the highlighted card did it — but
+`.card-option.is-selected` was styled `cursor: not-allowed` and dimmed, so the
+only way to undo a pick was drawn as the one thing you were forbidden to do.
+The fix is a "Remove card" button in the picker footer; the re-click still
+works and the highlight is now accent-coloured and clickable. Treat this as
+the general lesson it is: an affordance nobody can find is a missing feature,
+and styling is what says which is which.
+
+**Clearing a board card clears the streets after it** (`boardSlots.js`).
+Both pages flatten the board with `.filter(Boolean)` before posting it, so a
+hole in the middle silently closes up: clear the turn with a river dealt and
+the board still flattens to four cards — a legal turn board — with the river
+sitting in the turn's place, returning a confidently wrong number instead of
+an error. Wrong-but-plausible is the worst outcome available, so
+`clearBoardCard` takes the later streets too, which is also just how a hand
+runs. Sibling cards in the same street are spared: a flop is dealt at once,
+so a hole there is an incomplete board, and the street-boundary check rejects
+that with a real message. The rule lives in its own module rather than in
+either page because both need it identically, and one correctness rule kept
+in two places is the drift this codebase already has a lesson about.
 
 **The tournament clock's tick vs. sync split.** `TournamentManagerPage` does
 not poll once a second to animate the countdown — it re-renders once a
