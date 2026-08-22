@@ -18,6 +18,7 @@
 import { BOARD_SIZE, HOLE_CARD_COUNT } from '/shared/poker/cards.js';
 import { calculateOuts } from '/shared/poker/outs.js';
 import { MAX_PLAYERS, MIN_PLAYERS } from '/shared/poker/validation.js';
+import { clearBoardCard } from '../boardSlots.js';
 import { CardSlot } from '../components/CardSlot.js';
 import { EquityResult } from '../components/EquityResult.js';
 import { HistoryPanel } from '../components/HistoryPanel.js';
@@ -104,13 +105,20 @@ export function OddsCalculatorPage() {
 
   /**
    * @param {string} slotId
-   * @param {string} card
+   * @param {string|null} card the chosen card, or `null` to empty the slot
    */
   function pickCard(slotId, card) {
-    setSelection(prev => {
-      const current = getCard(prev, slotId);
-      return setCard(prev, slotId, current === card ? null : card);
-    });
+    const [kind, iStr] = slotId.split('-');
+
+    // Emptying a board card takes the later streets with it -- see
+    // boardSlots.js for why a hole in the middle of the board is worse than
+    // no board at all. A hole in a player's hand is harmless by comparison:
+    // it just makes the hand incomplete, which submit already reports.
+    if (card === null && kind !== 'player') {
+      setSelection(prev => ({ ...prev, ...clearBoardCard(prev, kind, Number(iStr)) }));
+      return;
+    }
+    setSelection(prev => setCard(prev, slotId, card));
   }
 
   /**

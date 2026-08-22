@@ -454,12 +454,17 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+/*
+ * The current pick. Clicking it empties the slot, so it must not wear the
+ * `not-allowed` cursor and dimmed text it used to -- that read as "disabled"
+ * and hid the only way to undo a selection. It is the accent colour precisely
+ * because it is the one live control in a grid of otherwise plain options.
+ */
 .card-option.is-selected {
-  background: var(--surface-5);
-  border-color: var(--border-slate-strong);
-  color: var(--color-text-muted);
-  cursor: not-allowed;
-  opacity: 0.7;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  cursor: pointer;
 }
 
 .card-option.is-used {
@@ -467,6 +472,18 @@ button:disabled {
   border-color: rgba(100, 116, 139, 0.4);
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Sits under the 52 cards, so emptying a slot is visible without hunting. */
+.card-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 0.5rem;
+}
+
+.card-picker-clear {
+  width: 100%;
 }
 
 .result-box {

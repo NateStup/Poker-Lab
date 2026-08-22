@@ -20,7 +20,8 @@ const e = React.createElement;
  * @param {boolean} props.isOpen whether this slot's picker popover is open
  * @param {() => void} props.onToggleOpen open this slot's popover, or close it if already open
  * @param {() => void} props.onClose close this slot's popover (e.g. on an outside click)
- * @param {(card: string) => void} props.onPick a card was chosen (or the current one re-clicked to clear it)
+ * @param {(card: string|null) => void} props.onPick a card was chosen, or
+ *   `null` if the slot was emptied -- assign it as given, no toggling needed
  * @param {string} props.label accessible name, e.g. "Player 1, card 1"
  */
 export function CardSlot({ card, usedCards, isOpen, onToggleOpen, onClose, onPick, label }) {
