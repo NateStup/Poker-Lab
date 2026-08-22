@@ -56,10 +56,10 @@ const BET_RING_SCALE = 0.56;
  * two numbers free to drift. The stylesheet gets it too -- inline, off this
  * constant -- so all three agree by construction rather than by upkeep.
  */
-export const CHIP_SWEEP_MS = 520;
+export const CHIP_SWEEP_MS = 640;
 
 /** Stagger between one seat's chips leaving and the next's. */
-const CHIP_SWEEP_STAGGER_MS = 45;
+const CHIP_SWEEP_STAGGER_MS = 55;
 
 /**
  * Chip-label wording per action type.
@@ -260,9 +260,10 @@ export function PokerTable({
                 'div',
                 {
                   className: `poker-table-pot ${sweepBets ? 'is-collecting' : ''}`,
-                  // Same constant the chips fly on, so the nudge lands with
-                  // them rather than drifting against a second number in CSS.
-                  style: sweepBets ? { animationDuration: `${CHIP_SWEEP_MS}ms` } : undefined
+                  // The *whole* sweep, stagger included, so the nudge lands
+                  // with the last chip and the figure changing -- not with
+                  // the first one, which arrives well before the pot is right.
+                  style: sweepBets ? { animationDuration: `${chipSweepDurationMs(sweepBets)}ms` } : undefined
                 },
                 e(ChipStack, { amount: pot, bigBlind }),
                 e('strong', null,

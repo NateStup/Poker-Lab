@@ -8,12 +8,18 @@
  * browser accepts, and paying a network request for it on a page that may
  * never play a sound at all. Nothing is loaded until the first sweep.
  *
- * A chip click is a very short, bright, fast-decaying noise -- closer to a
- * hi-hat than to a tone. So each click is white noise through a narrow
- * bandpass with a near-instant attack and a ~60ms decay, and a sweep is a
- * handful of those staggered a few milliseconds apart. Several chips landing
- * at slightly different times is the whole effect; a single click reads as a
- * UI beep, and simultaneous clicks read as one.
+ * The sound is a dealer *raking* chips in, and a rake is two things at once.
+ * Underneath is the scrape of chips dragged across felt: wide-band noise held
+ * for a few hundred milliseconds with its filter sweeping downward, which is
+ * what makes it read as something moving toward you rather than a burst of
+ * static. Over it is the clatter of chips knocking together -- a dozen very
+ * short, bright clicks scattered irregularly through that window.
+ *
+ * Both layers are needed. The scrape alone is a "shh" with no chips in it; the
+ * clicks alone are a handful of separate taps rather than a mass of chips
+ * being moved. And the clicks are scattered at random rather than evenly
+ * spaced, because an even stagger is heard as a rhythm, which is the one thing
+ * a rake is not.
  *
  * The `AudioContext` is built lazily on the first sweep rather than at import.
  * Browsers refuse to start audio outside a user gesture, and every sweep here
@@ -60,7 +66,9 @@ function audioContext() {
 function noise(ctx) {
   if (noiseBuffer) return noiseBuffer;
 
-  const frames = Math.floor(ctx.sampleRate * 0.08);
+  // Long enough to cover a whole rake without looping audibly -- a short
+  // buffer looped through a filter develops a periodic thrum.
+  const frames = Math.floor(ctx.sampleRate * 0.7);
   const buffer = ctx.createBuffer(1, frames, ctx.sampleRate);
   const channel = buffer.getChannelData(0);
   for (let i = 0; i < frames; i += 1) channel[i] = Math.random() * 2 - 1;
@@ -106,13 +114,52 @@ function scheduleClick(ctx, buffer, at, peak) {
 }
 
 /**
- * Play chips being swept into the middle.
+ * The scrape underneath: chips dragged across felt.
+ *
+ * The filter sweeping downward is what sells the direction of travel. A fixed
+ * band is static hiss; falling through the band as the gain decays is heard as
+ * a mass of something arriving and settling.
+ *
+ * @param {AudioContext} ctx
+ * @param {AudioBuffer} buffer
+ * @param {number} at when to start, on the context's clock
+ * @param {number} duration seconds
+ */
+function scheduleRake(ctx, buffer, at, duration) {
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  // Deliberately wide. A high Q here whistles; a rake is broadband.
+  filter.Q.value = 0.8;
+  filter.frequency.setValueAtTime(3400, at);
+  filter.frequency.exponentialRampToValueAtTime(850, at + duration);
+
+  const gain = ctx.createGain();
+  // A softer attack than a click: the rake takes hold of the chips rather
+  // than striking them.
+  gain.gain.setValueAtTime(0, at);
+  gain.gain.linearRampToValueAtTime(0.085, at + 0.06);
+  gain.gain.setValueAtTime(0.085, at + duration * 0.5);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+
+  source.connect(filter).connect(gain).connect(ctx.destination);
+  source.start(at);
+  source.stop(at + duration + 0.02);
+}
+
+/** How long a rake takes, in seconds. */
+const RAKE_SECONDS = 0.36;
+
+/**
+ * Play chips being raked into the middle.
  *
  * Safe to call unconditionally: it returns quietly when the user has muted,
  * when the browser has no Web Audio, or when the context refuses to start.
  *
  * @param {number} [chipCount] roughly how many stacks are moving, which sets
- *   how busy the rattle is; clamped to a sensible range either way
+ *   how much chip clatter rides over the scrape; clamped either way
  */
 export function playChipSweep(chipCount = 3) {
   if (isChipSoundMuted()) return;
@@ -124,15 +171,22 @@ export function playChipSweep(chipCount = 3) {
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
 
   const buffer = noise(ctx);
-  const clicks = Math.max(2, Math.min(6, Math.round(chipCount)));
   // A hair in the future: scheduling at exactly `currentTime` can land in a
-  // block that has already been rendered, which drops the first click.
-  let at = ctx.currentTime + 0.01;
+  // block that has already been rendered, which drops the attack.
+  const start = ctx.currentTime + 0.01;
 
-  for (let index = 0; index < clicks; index += 1) {
-    // Later chips are quieter, so the rattle settles instead of stopping dead.
-    scheduleClick(ctx, buffer, at, 0.16 - index * 0.012);
-    at += 0.028 + Math.random() * 0.022;
+  scheduleRake(ctx, buffer, start, RAKE_SECONDS);
+
+  // Chips knocking together as they are dragged. Scattered at random through
+  // the rake -- an even spacing would be heard as a beat.
+  const clatter = Math.max(7, Math.min(18, Math.round(chipCount * 4)));
+  for (let index = 0; index < clatter; index += 1) {
+    const offset = 0.02 + Math.random() * (RAKE_SECONDS - 0.08);
+    // Quieter than a lone click was: here they sit on top of the scrape
+    // rather than being the whole sound, and they thin out toward the end as
+    // the chips come to rest.
+    const fade = 1 - (offset / RAKE_SECONDS) * 0.55;
+    scheduleClick(ctx, buffer, start + offset, (0.05 + Math.random() * 0.04) * fade);
   }
 }
 

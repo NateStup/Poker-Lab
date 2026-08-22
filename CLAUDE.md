@@ -612,17 +612,33 @@ centre for it (`sweepBets`, `CHIP_SWEEP_MS`). Three things about it:
   several sweeps at once on the way past. Note the matching hazard: the effect's
   cleanup cancels the pending timer, so any non-sweep step has to clear the
   chips itself or they strand on the felt.
-- **A sweep moves chips; it never changes the pot.** A frame's `pot` already
-  counts chips sitting in front of seats, so the number is identical either
-  side of a sweep. A checked-through street sweeps nothing and correctly
-  animates nothing.
+- **The felt draws `chipsInMiddle`, not `frame.pot`.** A frame's `pot` is the
+  whole hand's wager *including* chips still in front of seats — right for
+  "what is this pot worth", wrong for "what is in the middle", and drawing it
+  on the felt counted every live bet twice. Subtracting the outstanding bets
+  makes the middle behave like a table: blinds sit in front of the blinds, a
+  street's chips arrive only when the dealer pulls them in, and the middle
+  holds still through a whole street of betting. It is computed in
+  `HandReplay` rather than added to the frame, because `pot` means what it
+  means and several places rely on it.
+- **The figure updates when the chips land, not when they leave.** The sweep
+  carries the pot it started from (`potBefore`) and the felt shows that until
+  the last chip arrives — otherwise the middle grows while the chips are still
+  visibly in front of the players. The pot's nudge is timed off
+  `chipSweepDurationMs` for the same reason.
+- A checked-through street sweeps nothing and correctly animates nothing.
 
 The sound (`services/chipSounds.js`) is synthesised with Web Audio rather than
 shipped as an audio file — the same dependency call the rest of the app makes,
-and nothing loads on a page that never plays one. A chip click is bandpassed
-noise with a near-instant attack and a ~60ms exponential tail; a sweep is a
-few of those staggered, because several chips landing slightly apart *is* the
-effect. The `AudioContext` is built on the first sweep, not at import: one
+and nothing loads on a page that never plays one. It is a dealer *raking*
+chips in, which is two layers: underneath, the scrape of chips dragged across
+felt (wide-band noise held a few hundred milliseconds with its filter sweeping
+downward, which is what reads as a mass moving toward you rather than as
+static); over it, a dozen very short bright clicks scattered irregularly
+through that window. Both are needed — the scrape alone has no chips in it,
+the clicks alone are separate taps rather than a mass being moved — and the
+clicks are scattered at random because an even stagger is heard as a rhythm,
+which is the one thing a rake is not. The `AudioContext` is built on the first sweep, not at import: one
 constructed at page load is born `suspended` and silently drops its first
 sound. Muting persists in `localStorage`, and the toggle's speaker is an
 inline SVG for the reason the suit pips are — a glyph is one font

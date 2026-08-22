@@ -54,9 +54,10 @@ function formatChips(amount) {
  * are none" identifies it exactly, with no need to special-case which street
  * or which kind of frame is arriving.
  *
- * Note the pot total does *not* change across a sweep -- a frame's `pot`
- * already counts chips sitting in front of seats. The sweep moves chips; it
- * never changes what the hand is worth.
+ * A sweep never changes what the hand is worth: a frame's `pot` already counts
+ * chips sitting in front of seats, so it reads the same either side. What the
+ * sweep changes is where those chips *are*, which is what `chipsInMiddle`
+ * measures and what the felt draws.
  *
  * @param {object} before
  * @param {object} after
@@ -64,6 +65,29 @@ function formatChips(amount) {
  */
 function isSweep(before, after) {
   return before.bets.some(bet => bet > 0) && after.bets.every(bet => bet === 0);
+}
+
+/**
+ * What is actually stacked in the middle of the table at this frame.
+ *
+ * A frame's `pot` is the whole hand's wager *including* chips still sitting in
+ * front of seats, which is the right number for "what is this pot worth" and
+ * the wrong one for "what is in the middle" -- drawing it on the felt counted
+ * every live bet twice, once in front of its player and again in the centre.
+ * Subtracting the outstanding bets is the difference, and it makes the middle
+ * behave the way a table does: blinds are in front of the blinds, not in the
+ * pot, and a street's chips arrive in the middle only when the dealer pulls
+ * them in.
+ *
+ * Deliberately computed here rather than added to the frame: `pot` means what
+ * it means, several places rely on it, and this is a question about how the
+ * felt is drawn.
+ *
+ * @param {object} frame
+ * @returns {number}
+ */
+function chipsInMiddle(frame) {
+  return frame.pot - frame.bets.reduce((sum, bet) => sum + bet, 0);
 }
 
 /**
@@ -194,7 +218,9 @@ export function HandReplay({ hand, positions }) {
   }, [frames.length]);
 
   // Chips in flight, and the preference for whether that makes a noise.
-  const [sweepBets, setSweepBets] = React.useState(null);
+  // `sweep` is `{bets, potBefore}` -- see `chipsInMiddle` for why the figure
+  // the sweep started from has to be carried along with the chips.
+  const [sweep, setSweep] = React.useState(null);
   const [muted, setMuted] = React.useState(isChipSoundMuted);
   const previousIndex = React.useRef(index);
 
@@ -211,25 +237,26 @@ export function HandReplay({ hand, positions }) {
     // would otherwise strand the chips on the felt with nothing left to
     // un-render them.
     if (index !== from + 1 || !isSweep(frames[from], frames[index])) {
-      setSweepBets(null);
+      setSweep(null);
       return undefined;
     }
 
     const bets = frames[from].bets;
-    setSweepBets(bets);
-    // Counted in stacks moving, not chips: that is what the rattle is of.
+    setSweep({ bets, potBefore: chipsInMiddle(frames[from]) });
+    // Counted in stacks moving, not chips: that is what the rake is of.
     playChipSweep(bets.filter(bet => bet > 0).length);
 
     // Un-rendering the chips is what ends the animation -- see `sweepBets` on
     // `PokerTable`. The wait comes from the same function the stagger does, so
-    // the last chip is never cut off mid-flight.
-    const timer = setTimeout(() => setSweepBets(null), chipSweepDurationMs(bets));
+    // the last chip is never cut off mid-flight, and it is also what holds the
+    // pot at its old figure until the chips arrive.
+    const timer = setTimeout(() => setSweep(null), chipSweepDurationMs(bets));
     return () => clearTimeout(timer);
   }, [index, frames]);
 
   // A hand swapped underneath the player leaves chips flying between two
   // tables that no longer relate to each other.
-  React.useEffect(() => setSweepBets(null), [hand]);
+  React.useEffect(() => setSweep(null), [hand]);
 
   function toggleMuted() {
     setMuted(current => {
@@ -309,7 +336,6 @@ export function HandReplay({ hand, positions }) {
       seats: hand.seats,
       buttonSeat: hand.buttonSeat,
       positions,
-      pot: frame.pot,
       winningSeats: frame.kind === 'result' ? frame.winningSeats : [],
       board: frame.board,
       bets: frame.bets,
@@ -320,7 +346,12 @@ export function HandReplay({ hand, positions }) {
       revealSeats,
       equityBySeat,
       bigBlind: hand.format.bigBlind,
-      sweepBets
+      // The middle holds its old figure for as long as chips are travelling
+      // to it, so the number changes as they land rather than the instant
+      // they leave. Without that the pot would already have grown while the
+      // chips were still visibly in front of the players.
+      pot: sweep ? sweep.potBefore : chipsInMiddle(frame),
+      sweepBets: sweep ? sweep.bets : null
     }),
 
     e(
