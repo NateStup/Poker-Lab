@@ -109,15 +109,24 @@ export function HandStreetEditor({
   const amountNumber = Number(amount);
   const hasAmount = amount !== '' && Number.isFinite(amountNumber) && amountNumber > 0;
 
+  /**
+   * @param {number} index
+   * @param {string|null} card the chosen card, or `null` to empty the slot
+   */
   function setBoardCard(index, card) {
     // While editing, the board keeps its holes: a fixed-size array with nulls,
     // the same convention every other card position in this app uses. Closing
     // the gaps here instead would slide a card picked into the third slot down
     // into the first one the moment it was chosen. The nulls are stripped on
     // save by the validator, which is also what rejects a half-dealt street.
+    //
+    // Unlike the calculator pages, emptying a card here needs no cascade into
+    // later streets: each street is its own board, so nothing shifts, and
+    // `validateHandLogRequest` refuses a turn dealt before a flop outright
+    // rather than quietly reading the cards one street early.
     const next = new Array(boardSize).fill(null);
     for (let i = 0; i < boardSize; i += 1) next[i] = value.board[i] ?? null;
-    next[index] = next[index] === card ? null : card;
+    next[index] = card;
     onChange({ ...value, board: next });
   }
 

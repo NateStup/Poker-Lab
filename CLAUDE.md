@@ -738,7 +738,8 @@ the general lesson it is: an affordance nobody can find is a missing feature,
 and styling is what says which is which.
 
 **Clearing a board card clears the streets after it** (`boardSlots.js`).
-Both pages flatten the board with `.filter(Boolean)` before posting it, so a
+The Odds Calculator and the Range Explorer both flatten the board with
+`.filter(Boolean)` before posting it, so a
 hole in the middle silently closes up: clear the turn with a river dealt and
 the board still flattens to four cards — a legal turn board — with the river
 sitting in the turn's place, returning a confidently wrong number instead of
@@ -748,7 +749,10 @@ runs. Sibling cards in the same street are spared: a flop is dealt at once,
 so a hole there is an incomplete board, and the street-boundary check rejects
 that with a real message. The rule lives in its own module rather than in
 either page because both need it identically, and one correctness rule kept
-in two places is the drift this codebase already has a lesson about.
+in two places is the drift this codebase already has a lesson about. The hand
+logger needs none of this — its streets are separate boards, so nothing
+shifts, and `validateHandLogRequest` refuses a turn dealt before a flop
+outright rather than reading the cards one street early.
 
 **The tournament clock's tick vs. sync split.** `TournamentManagerPage` does
 not poll once a second to animate the countdown — it re-renders once a

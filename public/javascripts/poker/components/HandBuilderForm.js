@@ -391,8 +391,7 @@ export function HandBuilderForm({ initialValue, submitLabel, onSubmit, onCancel 
                     onToggleOpen: () => setOpenSlot(openSlot === slotId ? null : slotId),
                     onClose: () => setOpenSlot(null),
                     onPick: picked => patchSeat(selectedSeat, {
-                      cards: seat.cards.map((existing, i) =>
-                        (i === cardIndex ? (existing === picked ? null : picked) : existing))
+                      cards: seat.cards.map((existing, i) => (i === cardIndex ? picked : existing))
                     }),
                     label: `${seat.name} card ${cardIndex + 1}`
                   });
