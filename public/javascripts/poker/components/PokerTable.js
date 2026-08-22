@@ -56,10 +56,14 @@ const BET_RING_SCALE = 0.56;
  * two numbers free to drift. The stylesheet gets it too -- inline, off this
  * constant -- so all three agree by construction rather than by upkeep.
  */
-export const CHIP_SWEEP_MS = 640;
+export const CHIP_SWEEP_MS = 950;
 
-/** Stagger between one seat's chips leaving and the next's. */
-const CHIP_SWEEP_STAGGER_MS = 55;
+/**
+ * Stagger between one seat's chips leaving and the next's. Kept well under
+ * the flight time so the chips overlap into one movement -- spaced far enough
+ * apart to queue up, a ten-handed pot takes several seconds to gather.
+ */
+const CHIP_SWEEP_STAGGER_MS = 70;
 
 /**
  * Chip-label wording per action type.

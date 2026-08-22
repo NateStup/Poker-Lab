@@ -218,8 +218,8 @@ export function HandReplay({ hand, positions }) {
   }, [frames.length]);
 
   // Chips in flight, and the preference for whether that makes a noise.
-  // `sweep` is `{bets, potBefore}` -- see `chipsInMiddle` for why the figure
-  // the sweep started from has to be carried along with the chips.
+  // `sweep` is `{bets, from}`: the chips travelling, and the frame the table
+  // goes on showing while they travel. See `shownFrame`.
   const [sweep, setSweep] = React.useState(null);
   const [muted, setMuted] = React.useState(isChipSoundMuted);
   const previousIndex = React.useRef(index);
@@ -242,7 +242,7 @@ export function HandReplay({ hand, positions }) {
     }
 
     const bets = frames[from].bets;
-    setSweep({ bets, potBefore: chipsInMiddle(frames[from]) });
+    setSweep({ bets, from: frames[from] });
     // Counted in stacks moving, not chips: that is what the rake is of.
     playChipSweep(bets.filter(bet => bet > 0).length);
 
@@ -267,26 +267,39 @@ export function HandReplay({ hand, positions }) {
 
   const isFirst = index === 0;
   const isLast = index === frames.length - 1;
-  const streetNotes = frame.kind === 'result' ? '' : hand.streets[frame.street].notes;
 
-  const runout = findAllInRunout(hand, frame);
+  // What the table shows. While chips are being raked in, that is still the
+  // *previous* frame -- the street that just finished, with its board and its
+  // pot -- because at a real table the dealer gathers the bets first and only
+  // then puts the next card out. Showing the flop at the same instant the
+  // chips start moving does the two halves of that at once and reads as the
+  // cards arriving before the street they belong to has been paid for.
+  //
+  // Only the presentation of *state* comes from here. The chips in front of
+  // seats and their labels still come from `frame`, where they are already
+  // cleared -- those chips are the ones in flight, so drawing them at their
+  // seats as well would show every bet twice.
+  const shownFrame = sweep ? sweep.from : frame;
+  const streetNotes = shownFrame.kind === 'result' ? '' : hand.streets[shownFrame.street].notes;
+
+  const runout = findAllInRunout(hand, shownFrame);
   // Once a hand is running out there is nothing left to wait for: the river
   // landing settles it, so the showdown reads there rather than one step later
   // on the settle frame. A hand still being bet only shows down at the end.
-  const isRunout = isRunoutSpot(frame);
-  const showdown = frame.kind === 'result' || isRunout ? evaluateShowdown(hand, frame) : null;
+  const isRunout = isRunoutSpot(shownFrame);
+  const showdown = shownFrame.kind === 'result' || isRunout ? evaluateShowdown(hand, shownFrame) : null;
 
   const equity = React.useMemo(() => {
     if (!runout) return null;
 
-    const key = `${frame.board.join('')}|${runout.seats.join(',')}`;
+    const key = `${shownFrame.board.join('')}|${runout.seats.join(',')}`;
     if (!equityCache.current.has(key)) {
-      equityCache.current.set(key, runoutEquity(hand, frame, runout));
+      equityCache.current.set(key, runoutEquity(hand, shownFrame, runout));
     }
     return equityCache.current.get(key);
-    // `frame` identity is stable per step, and the cache key covers everything
-    // the calculation actually depends on.
-  }, [hand, frame, runout]);
+    // `shownFrame` identity is stable per step, and the cache key covers
+    // everything the calculation actually depends on.
+  }, [hand, shownFrame, runout]);
 
   // Hero's cards are face-up throughout -- a replay is watched from the
   // hero's seat, and hiding what they were holding would make their decisions
@@ -303,9 +316,10 @@ export function HandReplay({ hand, positions }) {
     ? Object.fromEntries(equity.seats.map(seat => [seat.seatNumber, seat.equity]))
     : null;
 
-  const isShowdown = frame.kind === 'result' && frame.folded.filter(hasFolded => !hasFolded).length > 1;
+  const isShowdown = shownFrame.kind === 'result'
+    && shownFrame.folded.filter(hasFolded => !hasFolded).length > 1;
   const revealSeats = hand.seats.map((seat, seatIndex) =>
-    seat.isHero || ((isShowdown || isRunout) && !frame.folded[seatIndex]));
+    seat.isHero || ((isShowdown || isRunout) && !shownFrame.folded[seatIndex]));
 
   return e(
     'div',
@@ -323,7 +337,7 @@ export function HandReplay({ hand, positions }) {
             'span',
             {
               key: street,
-              className: `hand-replay-street-pill ${frame.street === street ? 'is-current' : ''} ${reached ? '' : 'is-unreached'}`
+              className: `hand-replay-street-pill ${shownFrame.street === street ? 'is-current' : ''} ${reached ? '' : 'is-unreached'}`
             },
             STREET_LABELS[street]
           );
@@ -336,8 +350,15 @@ export function HandReplay({ hand, positions }) {
       seats: hand.seats,
       buttonSeat: hand.buttonSeat,
       positions,
-      winningSeats: frame.kind === 'result' ? frame.winningSeats : [],
-      board: frame.board,
+      winningSeats: shownFrame.kind === 'result' ? shownFrame.winningSeats : [],
+      // Board and pot are held back through the sweep: the chips are gathered
+      // first, then the next card comes -- and the middle's figure changes as
+      // they land rather than the instant they leave, which would grow the pot
+      // while the chips were still visibly in front of the players.
+      board: shownFrame.board,
+      pot: chipsInMiddle(shownFrame),
+      // These come from the live frame, where the sweep has already emptied
+      // them -- those chips are the ones in flight.
       bets: frame.bets,
       betLabels: frame.lastActions,
       stacks: frame.stacks,
@@ -346,11 +367,6 @@ export function HandReplay({ hand, positions }) {
       revealSeats,
       equityBySeat,
       bigBlind: hand.format.bigBlind,
-      // The middle holds its old figure for as long as chips are travelling
-      // to it, so the number changes as they land rather than the instant
-      // they leave. Without that the pot would already have grown while the
-      // chips were still visibly in front of the players.
-      pot: sweep ? sweep.potBefore : chipsInMiddle(frame),
       sweepBets: sweep ? sweep.bets : null
     }),
 
@@ -388,10 +404,13 @@ export function HandReplay({ hand, positions }) {
     e(
       'div',
       { className: 'hand-replay-caption' },
-      e('p', { className: 'hand-replay-headline' }, headlineFor(frame, hand, positions)),
-      frame.kind === 'deal' && frame.dealt.length > 0
+      // Held back with the board: announcing "the flop comes 2c 7d Kh" while
+      // the felt is still gathering the last street's chips describes
+      // something that has not happened yet.
+      e('p', { className: 'hand-replay-headline' }, headlineFor(shownFrame, hand, positions)),
+      shownFrame.kind === 'deal' && shownFrame.dealt.length > 0
         ? e('span', { className: 'playing-card-row' },
-            frame.dealt.map(card => e(PlayingCard, { key: card, card, size: 'sm' })))
+            shownFrame.dealt.map(card => e(PlayingCard, { key: card, card, size: 'sm' })))
         : null
       // No "Pot 1,200" line here any more: the felt shows the pot as chips
       // with the amount beside them, and repeating it a centimetre below was
@@ -411,12 +430,12 @@ export function HandReplay({ hand, positions }) {
       ? e(
           'div',
           { className: 'hand-replay-notes' },
-          e('span', { className: 'stat-label' }, `${STREET_LABELS[frame.street]} notes`),
+          e('span', { className: 'stat-label' }, `${STREET_LABELS[shownFrame.street]} notes`),
           e('p', { className: 'hand-summary-notes' }, streetNotes)
         )
       : null,
 
-    frame.kind === 'result' && hand.result.notes
+    shownFrame.kind === 'result' && hand.result.notes
       ? e(
           'div',
           { className: 'hand-replay-notes' },

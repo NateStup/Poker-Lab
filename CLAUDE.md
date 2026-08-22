@@ -621,24 +621,39 @@ centre for it (`sweepBets`, `CHIP_SWEEP_MS`). Three things about it:
   holds still through a whole street of betting. It is computed in
   `HandReplay` rather than added to the frame, because `pot` means what it
   means and several places rely on it.
-- **The figure updates when the chips land, not when they leave.** The sweep
-  carries the pot it started from (`potBefore`) and the felt shows that until
-  the last chip arrives — otherwise the middle grows while the chips are still
-  visibly in front of the players. The pot's nudge is timed off
-  `chipSweepDurationMs` for the same reason.
+- **The whole table holds on `shownFrame` until the chips land.** A sweep
+  carries the frame it started from, and the board, the pot, the headline, the
+  street pill and the showdown all read from that until the last chip arrives
+  — so the dealer gathers the bets *first* and the next card comes *after*,
+  which is the order it happens at a table. Dealing the flop on the same beat
+  the chips start moving does both halves at once and reads as the cards
+  arriving before the street they belong to has been paid for. Only the chips
+  in front of seats and their labels come from the live frame, where the sweep
+  has already cleared them — those chips are the ones in flight, and drawing
+  them at their seats too would show every bet twice. The pot's nudge is timed
+  off `chipSweepDurationMs` so it lands with the last chip, not the first.
 - A checked-through street sweeps nothing and correctly animates nothing.
 
 The sound (`services/chipSounds.js`) is synthesised with Web Audio rather than
 shipped as an audio file — the same dependency call the rest of the app makes,
 and nothing loads on a page that never plays one. It is a dealer *raking*
-chips in, which is two layers: underneath, the scrape of chips dragged across
-felt (wide-band noise held a few hundred milliseconds with its filter sweeping
-downward, which is what reads as a mass moving toward you rather than as
-static); over it, a dozen very short bright clicks scattered irregularly
-through that window. Both are needed — the scrape alone has no chips in it,
-the clicks alone are separate taps rather than a mass being moved — and the
-clicks are scattered at random because an even stagger is heard as a rhythm,
-which is the one thing a rake is not. The `AudioContext` is built on the first sweep, not at import: one
+chips in, built in layers:
+
+- **Each chip is a click plus a ring.** The transient is a wide, very short
+  burst — the strike. Under it a narrow, high-Q band rings on several times
+  longer: the disc resonating. The click alone is a stick tapping a table; the
+  ring is what makes it a *chip*, and it is what the first version lacked.
+  Ring pitch is drawn per chip, so a pile clatters inharmonically the way a
+  rack does instead of repeating one note.
+- **A scrape underneath**, wide-band noise with its filter sweeping downward,
+  which reads as a mass moving toward you rather than as static. Kept quiet:
+  when the bed competes with the chips the whole thing turns to hiss.
+- **Density and irregularity carry the atmosphere.** Below roughly a dozen
+  knocks the ear picks them out and counts them, and an even stagger is heard
+  as a rhythm — the one thing a pile of chips never is. So they are many, and
+  scattered at random.
+
+The `AudioContext` is built on the first sweep, not at import: one
 constructed at page load is born `suspended` and silently drops its first
 sound. Muting persists in `localStorage`, and the toggle's speaker is an
 inline SVG for the reason the suit pips are — a glyph is one font
