@@ -9,11 +9,18 @@
  */
 
 import { AppShell } from './AppShell.js';
+import { applyStoredTableTheme } from './services/tableTheme.js';
 
 const container = document.getElementById('root');
 
 if (!container) {
   throw new Error('Missing #root element; cannot mount the application.');
 }
+
+// Before the mount, not inside a component: the theme is a data attribute on
+// `<html>` that every felt inherits through CSS, so painting it here means the
+// first table rendered is already the right colour rather than flashing the
+// default and correcting itself a frame later.
+applyStoredTableTheme();
 
 ReactDOM.createRoot(container).render(React.createElement(AppShell));

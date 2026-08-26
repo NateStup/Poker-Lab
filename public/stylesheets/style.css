@@ -16,6 +16,14 @@
   --color-bg-mid: #111827;
   --color-bg-end: #1f2937;
   --color-bg-glow: rgba(245, 158, 11, 0.16);
+  /* Pulled out into a token because it now has two consumers. A fullscreen
+     element is lifted out of the page, so the body painted behind it is not
+     behind it any more, and the replay has to paint the same background
+     itself. Two copies of a three-stop gradient is two places to edit and one
+     place to forget. */
+  --page-background:
+    radial-gradient(circle at top left, var(--color-bg-glow), transparent 20%),
+    linear-gradient(135deg, var(--color-bg-start) 0%, var(--color-bg-mid) 45%, var(--color-bg-end) 100%);
 
   /* Text */
   --color-text-primary: #f8fafc;
@@ -46,6 +54,14 @@
   --surface-5: rgba(71, 85, 105, 0.45);
   --surface-overlay: rgba(255, 255, 255, 0.06);
   --surface-overlay-soft: rgba(255, 255, 255, 0.04);
+
+  /* Table theme. The gradients live here rather than in `PokerTable.js`
+     because they are paint, and that component owns geometry -- see the
+     note at the top of `services/tableTheme.js`. Overridden per theme by
+     the `[data-table-theme]` blocks below, which the bootstrap sets on
+     `<html>` and the picker's swatches set on themselves. */
+  --felt-gradient: radial-gradient(ellipse at 50% 38%, #1c8b4d 0%, #0d5231 55%, #06331e 100%);
+  --rail-gradient: linear-gradient(165deg, #4a3320 0%, #2b1d11 55%, #1b120a 100%);
 
   /* Borders */
   --border-soft: rgba(255, 255, 255, 0.08);
@@ -84,12 +100,41 @@
   --font-symbol: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", "Arial Unicode MS", serif;
 }
 
+/* Table themes.
+ *
+ * Written as a bare attribute selector rather than `html[data-table-theme]`
+ * so the same rule serves two consumers: the document, which the bootstrap
+ * tags, and each swatch in the picker, which tags itself. A swatch therefore
+ * paints from the identical declaration the felt does, and cannot advertise a
+ * colour the table will not produce.
+ *
+ * Adding a theme is a block here plus an entry in `TABLE_THEMES`. Nothing
+ * counts them. */
+
+[data-table-theme='emerald'] {
+  --felt-gradient: radial-gradient(ellipse at 50% 38%, #1c8b4d 0%, #0d5231 55%, #06331e 100%);
+  --rail-gradient: linear-gradient(165deg, #4a3320 0%, #2b1d11 55%, #1b120a 100%);
+}
+
+[data-table-theme='sapphire'] {
+  --felt-gradient: radial-gradient(ellipse at 50% 38%, #1d6da6 0%, #0b3e66 55%, #06253a 100%);
+  --rail-gradient: linear-gradient(165deg, #313a4c 0%, #1c2231 55%, #11151f 100%);
+}
+
+[data-table-theme='burgundy'] {
+  --felt-gradient: radial-gradient(ellipse at 50% 38%, #9c2f3d 0%, #5d1622 55%, #350b12 100%);
+  --rail-gradient: linear-gradient(165deg, #4a3320 0%, #2b1d11 55%, #1b120a 100%);
+}
+
+[data-table-theme='graphite'] {
+  --felt-gradient: radial-gradient(ellipse at 50% 38%, #47535f 0%, #262f39 55%, #151b22 100%);
+  --rail-gradient: linear-gradient(165deg, #3c4148 0%, #24282e 55%, #14171b 100%);
+}
+
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background:
-    radial-gradient(circle at top left, var(--color-bg-glow), transparent 20%),
-    linear-gradient(135deg, var(--color-bg-start) 0%, var(--color-bg-mid) 45%, var(--color-bg-end) 100%);
+  background: var(--page-background);
   color: var(--color-text-primary);
   position: relative;
   min-height: 100vh;
@@ -1500,14 +1545,22 @@ button:disabled {
   position: absolute;
   padding: 0.6rem;
   border-radius: var(--radius-pill);
-  background: linear-gradient(165deg, #4a3320 0%, #2b1d11 55%, #1b120a 100%);
+  background: var(--rail-gradient);
   box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.09);
 }
 
+/* The felt and the rail are the only two things a theme touches, and the border
+   and inset shadow stay put across all of them -- they are what makes the cloth
+   sit *inside* the rail. Cards, chips, the button chip, the equity percentages
+   and the seat highlights keep their colours on every theme because each of them
+   carries information: a chip's colour is its denomination in big blinds
+   (`CHIP_TIERS`), so recolouring it would make the hand harder to read in
+   exchange for looking different. These two surfaces are purely decorative,
+   which is exactly why they are the ones on offer. */
 .poker-table-felt {
   height: 100%;
   border-radius: var(--radius-pill);
-  background: radial-gradient(ellipse at 50% 38%, #1c8b4d 0%, #0d5231 55%, #06331e 100%);
+  background: var(--felt-gradient);
   border: 2px solid rgba(0, 0, 0, 0.35);
   box-shadow: inset 0 0 45px rgba(0, 0, 0, 0.5);
   display: flex;
@@ -2088,24 +2141,158 @@ button.poker-table-seat:hover {
   margin: var(--space-md) 0 var(--space-sm);
 }
 
+/* Matched on `:fullscreen`, not on a class React sets. The browser owns
+   fullscreen state and changes it on Escape, on its own exit control, and on
+   the element leaving the document, so a class mirroring that state can be
+   wrong for a frame or, if an event is missed, for good. The pseudo-class
+   cannot be. `HandReplay`'s `isFullscreen` state exists only to pick which
+   icon the button draws. */
+.hand-replay:fullscreen {
+  /* Without this the felt sits on whatever the browser paints under a
+     fullscreen element, which is a black rectangle in Chrome and Firefox.
+     The page's own background is the point of the token above. */
+  background: var(--page-background);
+  padding: var(--space-md) var(--space-xl);
+  /* The equity panel, the showdown and the street notes all still render.
+     On a short screen they go below the fold, so the container has to be
+     scrollable or they are simply unreachable. */
+  overflow-y: auto;
+  /* A column, so the table can be handed the height left over after the
+     street pills, the controls and the caption have taken theirs. The
+     first version of this reserved a flat 19rem for those instead, which
+     was an estimate of something the browser measures exactly -- and it
+     was wrong enough that below roughly 900px of viewport height the felt
+     came out *smaller* fullscreen than windowed. */
+  display: flex;
+  flex-direction: column;
+  /* The table's floor and cap are widths, and the only correct source for
+     "how much width is there" is the container itself. `100vw` was the
+     alternative and it is wrong by the width of this element's own
+     scrollbar, which on a short screen is always present -- a horizontal
+     scrollbar caused by a vertical one. Containment applies only while
+     fullscreen, so nothing outside this state is affected. */
+  container-type: inline-size;
+}
+
+/* A caption row stretched across a 2560px monitor reads as a banner rather
+   than a line of text under a table. */
+.hand-replay:fullscreen > * {
+  max-width: 1200px;
+  margin-inline: auto;
+}
+
+.hand-replay:fullscreen::backdrop {
+  background: var(--color-bg-end);
+}
+
+.hand-replay:fullscreen .poker-table {
+  flex: 1 1 auto;
+  align-self: center;
+  /* Every constraint is on height, and width follows from `aspect-ratio`.
+     The previous version clamped width at both ends while flex handed the
+     item a definite height, so whenever a clamp bound, the box stopped
+     being the ratio `toCss` assumes when it places seats -- and the seats
+     went off the rail. One constrained dimension is what makes that
+     impossible rather than merely unlikely. */
+  width: auto;
+  /* Never smaller than windowed. 780px is `.poker-table`'s own max-width,
+     bounded by the width actually available and divided by the ratio to
+     say the same thing about height. Without that bound the floor forces
+     780px into containers narrower than 780px: the round layout at phone
+     widths, and the wide layout anywhere under roughly 850px. */
+  min-height: calc(min(780px, 100cqi) / var(--table-aspect));
+  /* Was `min(1100px, 100%)`. A percentage in `max-height` resolves against
+     the container's *height*, so that clamp was measuring the wrong axis
+     entirely -- it computed to about 369px at 1280x720 and only failed to
+     bite because `min-height` overrides `max-height` in a conflict. */
+  max-height: calc(min(1100px, 100cqi) / var(--table-aspect));
+  /* Half a seat box, top and bottom. `.poker-table-seat` is a fixed size
+     and seats are centred on the outline, so they hang outside the box. */
+  margin-block: 2.75rem;
+}
+
+/* The felt is the reason to go fullscreen, and the timeline is a long list
+   that pushes it off the top of the screen on anything shorter than a
+   desktop monitor. Nothing becomes unreachable: the scrubber, the arrow
+   keys and the jump-to-end buttons all still step the same frames. What is
+   lost is jumping straight to one beat by name, which is a real cost and
+   the reason this is a judgement call rather than an obvious one. */
+.hand-replay:fullscreen .hand-replay-timeline {
+  display: none;
+}
+
+/* Swatches sit at the end of the controls row, next to the fullscreen
+   button, which is where the replay's other viewer-level controls live.
+   `role="group"` with a label in the markup is what tells a screen reader
+   these four buttons are one control rather than four unrelated ones. */
+.hand-replay-themes {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+/* The swatch paints from `--felt-gradient`, which it sets on itself via its
+   own `data-table-theme`. One declaration, two consumers, no hex value in
+   JavaScript. */
+.table-theme-swatch {
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--border-slate);
+  background: var(--felt-gradient);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+
+.table-theme-swatch:hover {
+  transform: scale(1.12);
+  border-color: var(--border-slate-strong);
+}
+
+/* The current theme is ringed in the accent, the same colour every other
+   "this one is selected" state in the app uses. It is not dimmed and not
+   `not-allowed`: clicking the active swatch is harmless, and styling a
+   reachable control as forbidden is the mistake the card picker already
+   made once. */
+.table-theme-swatch.is-active {
+  border-color: var(--color-accent);
+  transform: scale(1.12);
+}
+
+.table-theme-swatch:focus-visible {
+  outline: 2px solid var(--color-accent-light);
+  outline-offset: 2px;
+}
+
+/* The scale on hover is confirmation of something the ring already says, so
+   it costs nothing to drop. */
+@media (prefers-reduced-motion: reduce) {
+  .table-theme-swatch {
+    transition: none;
+  }
+
+  .table-theme-swatch:hover,
+  .table-theme-swatch.is-active {
+    transform: none;
+  }
+}
+
 .hand-replay-scrubber {
   flex: 1 1 8rem;
   min-width: 6rem;
   accent-color: var(--color-accent);
 }
 
-/* Square, so the speaker sits in the row without stretching it. */
-.hand-replay-sound {
+/* Square, so the icon sits in the row without stretching it. */
+.hand-replay-fullscreen {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0.35rem;
   line-height: 0;
   flex: 0 0 auto;
-}
-
-.hand-replay-sound[aria-pressed="true"] {
-  color: var(--color-text-muted);
 }
 
 .hand-replay-caption {

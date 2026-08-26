@@ -3,8 +3,7 @@
  *
  * A viewer preference, not a property of the hand: two people opening the same
  * shared link each see their own table, and nothing about the record changes.
- * That is the same call `chipSounds.js` makes about muting, and this follows
- * its shape deliberately -- one `localStorage` key, read and written behind a
+ * It is stored accordingly -- one `localStorage` key, read and written behind a
  * try/catch, with a disabled store treated as "use the default" rather than as
  * an error.
  *
