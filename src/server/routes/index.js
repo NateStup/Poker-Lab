@@ -9,6 +9,7 @@
 import { Router } from 'express';
 
 import { createEquityRouter } from './equityRoutes.js';
+import { createHandLogRouter } from './handLogRoutes.js';
 import { createHistoryRouter } from './historyRoutes.js';
 import { createRangeRouter } from './rangeRoutes.js';
 import { createTournamentRouter } from './tournamentRoutes.js';
@@ -18,11 +19,12 @@ import { createTournamentRouter } from './tournamentRoutes.js';
  *   equityService: import('../services/EquityService.js').EquityService,
  *   rangeService: import('../services/RangeService.js').RangeService,
  *   tournamentService: import('../services/TournamentService.js').TournamentService,
+ *   handLogService: import('../services/HandLogService.js').HandLogService,
  *   historyRepository: import('../store/HistoryRepository.js').HistoryRepository
  * }} deps
  * @returns {import('express').Router}
  */
-export function createApiRouter({ equityService, rangeService, tournamentService, historyRepository }) {
+export function createApiRouter({ equityService, rangeService, tournamentService, handLogService, historyRepository }) {
   const router = Router();
 
   /** Liveness probe -- useful locally and required by most hosting platforms. */
@@ -33,6 +35,7 @@ export function createApiRouter({ equityService, rangeService, tournamentService
   router.use('/equity', createEquityRouter({ equityService }));
   router.use('/ranges', createRangeRouter({ rangeService }));
   router.use('/tournaments', createTournamentRouter({ tournamentService }));
+  router.use('/hands', createHandLogRouter({ handLogService }));
   router.use('/history', createHistoryRouter({ historyRepository }));
 
   return router;

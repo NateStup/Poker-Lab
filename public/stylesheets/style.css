@@ -78,6 +78,10 @@
   --space-xl: 2rem;
 
   --font-sans: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Suit pips (♠♥♦♣). Left to the body font they can be substituted by an
+     emoji font -- Segoe UI Emoji on Windows -- which renders them as colour
+     glyphs that look broken at card size and ignore the suit colour. */
+  --font-symbol: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", "Arial Unicode MS", serif;
 }
 
 body {
@@ -90,7 +94,22 @@ body {
   position: relative;
   min-height: 100vh;
   overflow-x: hidden;
-  isolation: isolate;
+  /* Deliberately *not* `isolation: isolate`.
+   *
+   * Isolating here reads like the safe way to pin `::before` below the content,
+   * and it is also what left a band of the previous page painted under the
+   * footer when a tall route was replaced by a short one. Making the body its
+   * own stacking context gets the whole page rastered into tiles that Chrome
+   * then failed to invalidate on that shrink -- the giveaway being that the
+   * band never repainted (nothing under paint-flashing) yet reappeared when a
+   * hover finished, i.e. a cached tile being composited back in rather than
+   * stale pixels sitting untouched. Bisecting the body's properties one at a
+   * time put it on this one.
+   *
+   * Nothing needs it. The pattern is pinned from both sides already: the spec
+   * paints negative-z-index descendants after the canvas background, which
+   * keeps `::before` above it, and `.site-header/.site-content/.site-footer`
+   * each carry `z-index: 1`, which keeps the content above `::before`. */
 }
 
 body::before {
@@ -110,6 +129,37 @@ body::before {
 
 * {
   box-sizing: border-box;
+}
+
+/* Readable by a screen reader, invisible on screen. For the handful of places
+   a picture carries the meaning and the word still has to exist -- the pot is
+   drawn as chips with an amount, and "Pot" survives only here. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Motion in this app is all confirmation of something that already happened
+   (chips being pushed in), never the only way to learn it -- so switching it
+   off costs nothing and is honoured wherever it is used. */
+@media (prefers-reduced-motion: reduce) {
+  /* `HandReplay` already skips the sweep outright in this case, so no chip
+     should ever reach here. Belt and braces: if one did, it must not sit
+     frozen on the felt at its starting position. */
+  .poker-table-bet.is-sweeping {
+    display: none;
+  }
+
+  .poker-table-pot.is-collecting {
+    animation: none;
+  }
 }
 
 /* ── Page shell: header/nav, content, footer ──────────────────────────────── */
@@ -147,8 +197,8 @@ body::before {
 }
 
 .site-title-mark {
-  font-size: 1.4rem;
-  line-height: 1;
+  color: var(--color-accent);
+  vertical-align: -0.12em;
 }
 
 .site-header nav ul {
@@ -314,6 +364,7 @@ button:disabled {
 
 .card-chip-suit {
   font-size: 0.95em;
+  font-family: var(--font-symbol);
 }
 
 .card-chip.suit-red {
@@ -332,6 +383,65 @@ button:disabled {
   font-size: 1.05rem;
   border-radius: calc(var(--radius-md) - 2px);
   gap: 0.1rem;
+}
+
+/* A card drawn as a card (`PlayingCard`), as opposed to the inline `.card-chip`
+   token above. Used wherever the card itself is the thing being looked at --
+   the board and the hole cards on the felt. Everything inside scales off
+   `--card-width`, so one variable per size keeps the proportions right.
+   The face is a centred rank over a single pip: at the size these render on
+   the felt, a corner index *plus* a centre pip put two copies of the suit in
+   a 2.4rem box, which read as a smudge rather than as a card. */
+.playing-card {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.04em;
+  width: var(--card-width);
+  height: calc(var(--card-width) * 1.42);
+  border-radius: calc(var(--card-width) * 0.14);
+  border: 1px solid rgba(15, 23, 42, 0.45);
+  background: linear-gradient(160deg, #ffffff 0%, #eef2f7 100%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  font-size: calc(var(--card-width) * 0.42);
+  font-weight: 800;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.playing-card-sm { --card-width: 1.55rem; }
+.playing-card-md { --card-width: 2.4rem; }
+.playing-card-lg { --card-width: 3.2rem; }
+
+.playing-card-rank {
+  font-size: 1.2em;
+  letter-spacing: -0.02em;
+}
+
+.playing-card-suit {
+  font-family: var(--font-symbol);
+  font-size: 1.05em;
+}
+
+.playing-card.suit-red { color: var(--color-danger-strong); }
+.playing-card.suit-black { color: #111827; }
+
+.playing-card.is-face-down {
+  background:
+    repeating-linear-gradient(45deg, #1e3a8a 0 3px, #172554 3px 6px);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.playing-card.is-dimmed {
+  opacity: 0.45;
+  filter: grayscale(0.5);
+}
+
+.playing-card-row {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
 }
 
 .card-picker {
@@ -642,6 +752,18 @@ button:disabled {
   align-items: center;
 }
 
+/* A button whose whole label is its icon: square, with the glyph centred
+   rather than sitting on a text baseline. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
+  height: 2.2rem;
+  flex: 0 0 auto;
+}
+
 .picker-row-label.suit-red { color: var(--color-danger); }
 .picker-row-label.suit-black { color: var(--color-text-secondary); }
 
@@ -738,6 +860,13 @@ button:disabled {
 .placeholder-card {
   border-style: dashed;
   border-color: var(--border-slate-strong);
+}
+
+/* A result card sitting directly under a form needs its own gap: the form's
+   grid gap stops at the form's edge, so without this the card crowds the
+   submit button rather than reading as the next thing on the page. */
+.card-form + .result-card {
+  margin-top: var(--space-lg);
 }
 
 /* ── History ────────────────────────────────────────────────────────────── */
@@ -1305,4 +1434,867 @@ button:disabled {
 
 .tournament-list-name {
   font-weight: 700;
+}
+
+.tournament-list-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Status line: "Level 4 · 200/400 (ante 50)", with a dot carrying the state
+   that qualifies it. */
+.tournament-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text-secondary);
+}
+
+.tournament-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  flex: 0 0 auto;
+}
+
+.tournament-status.is-live .tournament-status-dot {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+}
+
+.tournament-status.is-paused .tournament-status-dot {
+  background: var(--color-accent);
+}
+
+.tournament-status.is-setup .tournament-status-dot {
+  background: var(--color-info);
+}
+
+.tournament-status.is-done .tournament-status-dot {
+  background: var(--color-text-muted);
+}
+
+/* ── Hand Logger ────────────────────────────────────────────────────────── */
+
+/* The table diagram. Both the felt's box and the seats' offsets are computed
+   in `PokerTable.js` from one shape definition and applied inline (including
+   the container's aspect ratio), so this block only paints -- it never decides
+   where anything sits. Splitting the geometry across the two would put the
+   seats off the felt the first time either side was edited alone. */
+/* The vertical margin is deliberately generous: seats are centred *on* the
+   table's outline, so the top and bottom ones hang half outside the box. */
+.poker-table {
+  position: relative;
+  width: 100%;
+  max-width: 780px;
+  margin: var(--space-xl) auto;
+}
+
+/* The rail: the padded ring a real table's felt sits inside. `--radius-pill`
+   on a wide box is what makes the outline a racetrack rather than an ellipse,
+   matching the stadium the seats are spaced around. */
+.poker-table-rail {
+  position: absolute;
+  padding: 0.6rem;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(165deg, #4a3320 0%, #2b1d11 55%, #1b120a 100%);
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+.poker-table-felt {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: radial-gradient(ellipse at 50% 38%, #1c8b4d 0%, #0d5231 55%, #06331e 100%);
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 45px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The logo stitched into the felt. Absolutely positioned and pinned behind the
+   board and pot, at an opacity low enough to read as part of the cloth rather
+   than as content -- it must never compete with the cards for attention. */
+.poker-table-logo {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  /* Sits above the middle rather than on it. The padding shrinks the box the
+     logo centres in, lifting it by half -- which is what clears the wordmark
+     from the pot's two lines whether or not a board is dealt. Board cards are
+     opaque and land over the mark; that is fine, two pieces of *text* on top
+     of each other is not. */
+  padding-bottom: 5.5rem;
+  color: rgba(226, 232, 240, 0.16);
+  pointer-events: none;
+  /* An inset highlight under the shape is what sells "embroidered": the felt
+     appears to be raised around the stitching rather than printed on. */
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.06));
+}
+
+.poker-table-logo-word {
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em;
+  text-transform: uppercase;
+}
+
+.poker-table-middle {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0 var(--space-md);
+}
+
+/* Reserved height, so the pot underneath doesn't jump as a replay turns the
+   flop, turn and river over one at a time. */
+.poker-table-board {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: center;
+  min-height: 3.5rem;
+  align-items: center;
+}
+
+/* Nudged below the middle of the felt so the pot's two lines clear the logo's
+   wordmark, which sits just under the spade. Two overlapping pieces of text
+   is the one thing a faded backdrop can't survive. */
+/* The pot: a stack of chips with the amount beside it, no "Pot" caption --
+   a pile of chips in the middle of a table does not need to be labelled as
+   one. Laid out as a row so the number reads as the value *of* the stack it
+   sits next to; stacked vertically it read as a heading over a total. */
+.poker-table-pot {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: var(--space-md);
+  color: var(--color-text-primary);
+  font-size: 1.05rem;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+/* A nudge as the swept chips land. Duration is set inline from
+   `CHIP_SWEEP_MS`, so this can't drift away from the chips' own flight. */
+.poker-table-pot.is-collecting {
+  animation-name: pot-collect;
+  animation-timing-function: ease-out;
+}
+
+@keyframes pot-collect {
+  0%, 82% { transform: scale(1); }
+  93% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+/* A bet in flight. It is `.poker-table-bet` with a modifier rather than an
+   element of its own, so it starts in precisely the place the bet it replaces
+   was sitting -- the illusion is entirely dependent on that.
+
+   `left`/`top` are animated rather than a transform, because the start and end
+   are both *container* percentages, and a percentage `translate` resolves
+   against the chip's own box instead. A handful of elements for a second is
+   well inside what that costs. */
+.poker-table-bet.is-sweeping {
+  z-index: 3;
+  animation-name: chip-sweep;
+  /* Dragged, not fired: it takes hold gradually and keeps pulling, rather
+     than launching off the mark the way a plain ease-out does. */
+  animation-timing-function: cubic-bezier(0.4, 0.05, 0.3, 1);
+  /* `both`, so a staggered chip waits at its seat through its delay instead
+     of starting the journey already part-way along. */
+  animation-fill-mode: both;
+}
+
+/* Both ends stated outright. The start comes from custom properties set
+   inline, so nothing here depends on the browser inferring the opening frame
+   from the element's own styles.
+
+   Opacity holds almost the whole way and drops only at the pile: a chip that
+   dims en route reads as vanishing rather than as arriving. */
+@keyframes chip-sweep {
+  from {
+    left: var(--sweep-from-left);
+    top: var(--sweep-from-top);
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  84% {
+    opacity: 1;
+  }
+
+  to {
+    left: var(--sweep-to-left);
+    top: var(--sweep-to-top);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.72);
+  }
+}
+
+/* Chips a seat has out, sitting between them and the middle. */
+.poker-table-bet {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.poker-table-bet-action {
+  padding: 0.08rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid var(--border-slate);
+  color: var(--color-text-secondary);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.poker-table-bet.is-folded .poker-table-bet-action {
+  opacity: 0.5;
+}
+
+/* Bottom-aligned, not centred: the stack grows upward from the felt, so the
+   amount beside it belongs next to where the chips sit rather than floating to
+   the middle of a stack whose height changes with every wager. */
+.poker-table-bet-chips {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--color-accent-light);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+/* Only the width is set here. The height follows from the viewBox, which is
+   what keeps a one-chip wager flat and a five-chip one tall -- see
+   `ChipStack.js`, which owns every other number about a chip. */
+.chip-stack {
+  width: 2rem;
+  height: auto;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.poker-table-seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 8.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-slate);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+button.poker-table-seat {
+  cursor: pointer;
+}
+
+button.poker-table-seat:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.poker-table-seat.is-hero {
+  border-color: var(--color-accent);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--color-text-primary);
+}
+
+.poker-table-seat.is-selected {
+  border-color: var(--color-info);
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
+}
+
+.poker-table-seat.is-winner {
+  border-color: var(--color-success);
+  box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.3);
+}
+
+/* Replay states: whose turn it is, and who is already out. */
+.poker-table-seat.is-acting {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.45), 0 0 18px rgba(245, 158, 11, 0.25);
+}
+
+.poker-table-seat.is-folded {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.poker-table-seat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.poker-table-position {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.poker-table-button-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-primary);
+  color: var(--color-bg-start);
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+
+.poker-table-seat-name {
+  font-weight: 700;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.poker-table-seat-cards {
+  display: flex;
+  gap: 0.15rem;
+  min-height: 1.2rem;
+  align-items: center;
+}
+
+/* Live equity during an all-in run-out, beside the hand it belongs to. */
+.poker-table-equity {
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-pill);
+  background: rgba(245, 158, 11, 0.18);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: var(--color-accent-light);
+  font-size: 0.7rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Seat editor, revealed under the table when a seat is clicked. */
+.hand-seat-editor {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.hand-seat-editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.hand-hero-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+/* Streets: four editors that sit side by side on a wide screen and stack on
+   a narrow one, so logging on a phone at the table stays usable. */
+.hand-streets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-md);
+  margin: var(--space-lg) 0;
+}
+
+.hand-street,
+.hand-summary-street {
+  padding: var(--space-md);
+  background: var(--surface-2-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.hand-street h3,
+.hand-summary-street h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Action entry: who is acting, the one-click decisions, then sizing. Laid out
+   in that order because that is the order the decision is made in. */
+.hand-action-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0;
+  padding: var(--space-sm);
+  background: var(--surface-overlay-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+
+.hand-action-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.hand-action-who select {
+  flex: 1 1 9rem;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.hand-action-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.hand-action-quick .ghost-button {
+  flex: 1 1 auto;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.hand-action-sizing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.hand-action-slider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.hand-action-slider {
+  flex: 1 1 4rem;
+  min-width: 3rem;
+  accent-color: var(--color-accent);
+}
+
+.hand-action-amount {
+  flex: 0 1 5rem;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.hand-action-slider-row button {
+  flex: 0 0 auto;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.hand-action-list {
+  list-style: none;
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.hand-action-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0.25rem var(--space-xs);
+  background: var(--surface-overlay-soft);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.hand-action-seat {
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  min-width: 3rem;
+}
+
+.hand-action-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hand-action-type {
+  color: var(--color-accent-light);
+}
+
+.hand-action-row .ghost-button {
+  padding: 0 0.35rem;
+  border: none;
+}
+
+.hand-notes {
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border-slate);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.hand-outcome {
+  margin: var(--space-xs) 0 var(--space-sm);
+  font-weight: 700;
+  color: var(--color-success);
+}
+
+/* Read-only summary. */
+.hand-summary-streets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-md);
+  margin: var(--space-lg) 0;
+}
+
+.hand-summary-notes {
+  margin: var(--space-sm) 0 0;
+  padding: var(--space-sm);
+  background: var(--surface-overlay-soft);
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.hand-net-up {
+  color: var(--color-success);
+}
+
+.hand-net-down {
+  color: var(--color-danger);
+}
+
+.hand-list-cards {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin-left: var(--space-sm);
+  vertical-align: middle;
+}
+
+/* Replay / write-up switch, and the badge a shared (view-only) hand carries. */
+.hand-tabs {
+  display: flex;
+  gap: var(--space-xs);
+  margin: var(--space-md) 0 0;
+}
+
+.hand-view-only-badge {
+  display: inline-block;
+  margin-top: var(--space-xs);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ── Hand replayer ──────────────────────────────────────────────────────── */
+
+.hand-replay-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+.hand-replay-street {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.hand-replay-street-pill {
+  padding: 0.15rem 0.6rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-slate);
+  background: var(--surface-3);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hand-replay-street-pill.is-current {
+  border-color: var(--color-accent);
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-text-primary);
+}
+
+/* A street the hand never reached still shows, so the reader can see at a
+   glance that it ended early rather than wondering where the river went. */
+.hand-replay-street-pill.is-unreached {
+  opacity: 0.4;
+}
+
+.hand-replay-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin: var(--space-md) 0 var(--space-sm);
+}
+
+.hand-replay-scrubber {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  accent-color: var(--color-accent);
+}
+
+/* Square, so the speaker sits in the row without stretching it. */
+.hand-replay-sound {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem;
+  line-height: 0;
+  flex: 0 0 auto;
+}
+
+.hand-replay-sound[aria-pressed="true"] {
+  color: var(--color-text-muted);
+}
+
+.hand-replay-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-2-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.hand-replay-headline {
+  margin: 0;
+  flex: 1 1 12rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.hand-replay-notes {
+  margin-top: var(--space-sm);
+}
+
+.hand-replay-timeline {
+  list-style: none;
+  margin: var(--space-md) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.hand-replay-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 0.3rem var(--space-sm);
+  background: var(--surface-overlay-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hand-replay-step:hover {
+  border-color: var(--border-slate);
+  color: var(--color-text-primary);
+}
+
+.hand-replay-step.is-current {
+  border-color: var(--color-accent);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--color-text-primary);
+}
+
+/* Deals and the settle are signposts between the actions, not actions. */
+.hand-replay-step.is-marker {
+  background: transparent;
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+/* ── All-in equity and showdown ─────────────────────────────────────────── */
+
+.all-in-equity,
+.showdown-result {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface-2-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.all-in-equity h3,
+.showdown-result h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.all-in-equity-list,
+.showdown-list {
+  list-style: none;
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.all-in-equity-row,
+.showdown-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 0.3rem var(--space-sm);
+  background: var(--surface-overlay-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.all-in-equity-row.is-leader {
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.showdown-row.is-winner {
+  border-color: var(--color-success);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+/* The bar is the part that makes a 78/22 readable at a glance; it takes the
+   slack in the row so the percentage stays right-aligned. */
+.all-in-equity-bar {
+  flex: 1 1 4rem;
+  min-width: 3rem;
+  height: 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-4);
+  overflow: hidden;
+}
+
+.all-in-equity-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--color-accent-dark), var(--color-accent-light));
+}
+
+.all-in-equity-value {
+  min-width: 3.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.showdown-hand {
+  margin-left: auto;
+  color: var(--color-text-secondary);
+  text-align: right;
+}
+
+.showdown-verdict {
+  font-weight: 700;
+  color: var(--color-success);
+}
+
+.showdown-mismatch {
+  margin: var(--space-sm) 0 0;
+  color: var(--color-accent-light);
+}
+
+/* Below this width the seats would overlap each other on the felt, so
+   `PokerTable` switches to a round table (the seat geometry follows) and the
+   seats shrink to match. */
+@media (max-width: 640px) {
+  .poker-table-seat {
+    width: 6rem;
+    font-size: 0.7rem;
+  }
+
+  .poker-table-board {
+    min-height: 2.6rem;
+  }
+
+  .chip-stack {
+    width: 1.5rem;
+  }
+
+  /* Less felt to lift the mark into. */
+  .poker-table-logo {
+    padding-bottom: 3.5rem;
+  }
+
+  .poker-table-logo .spade-mark {
+    width: 1.8rem;
+    height: 1.8rem;
+  }
+
+  .poker-table-logo-word {
+    font-size: 0.7rem;
+    letter-spacing: 0.24em;
+    text-indent: 0.24em;
+  }
+
+  .playing-card-md { --card-width: 1.8rem; }
 }

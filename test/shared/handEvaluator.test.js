@@ -13,6 +13,7 @@ import {
   HAND_CATEGORY,
   compareCards,
   compareHands,
+  describeHand,
   evaluateHand,
   findStraightHigh,
   findWinners
@@ -170,5 +171,35 @@ describe('findWinners', () => {
       evaluateHand(['Ad', 'Kd', 'Qh', 'Jh', 'Th'])
     ];
     assert.deepEqual(findWinners(scores), [0, 1]);
+  });
+});
+
+describe('describeHand', () => {
+  /** @param {string[]} cards @returns {string} */
+  function describe7(cards) {
+    return describeHand(evaluateHand(cards));
+  }
+
+  it('names each rank in the order the hand resolves ties', () => {
+    assert.equal(describe7(['Ks', 'Kd', 'Qh', 'Qc', '7s', '3d', '2c']), 'Two pair, kings and queens');
+    assert.equal(describe7(['Ks', 'Kd', 'Kh', 'Qc', 'Qs', '3d', '2c']), 'Full house, kings full of queens');
+    assert.equal(describe7(['6s', '6d', '6h', '6c', 'Qs', '3d', '2c']), 'Four of a kind, sixes');
+    assert.equal(describe7(['Ts', 'Td', 'Th', 'Qc', '9s', '3d', '2c']), 'Three of a kind, tens');
+    assert.equal(describe7(['Js', 'Jd', 'Qh', '8c', '5s', '3d', '2c']), 'Pair of jacks');
+  });
+
+  it('describes the hands that are named by their high card', () => {
+    assert.equal(describe7(['Ah', '9h', '7h', '4h', '2h', 'Kd', 'Qc']), 'Flush, ace high');
+    assert.equal(describe7(['9s', '8d', '7h', '6c', '5s', '2d', '2c']), 'Straight, nine high');
+    assert.equal(describe7(['As', 'Kd', 'Qh', '9c', '7s', '4d', '2c']), 'Ace high');
+  });
+
+  it('reads the wheel as a five-high straight', () => {
+    assert.equal(describe7(['As', '2d', '3h', '4c', '5s', 'Kd', 'Qc']), 'Straight, five high');
+  });
+
+  it('calls an ace-high straight flush a royal flush, and nothing else one', () => {
+    assert.equal(describe7(['As', 'Ks', 'Qs', 'Js', 'Ts', '2d', '3c']), 'Royal flush');
+    assert.equal(describe7(['Ks', 'Qs', 'Js', 'Ts', '9s', '2d', '3c']), 'Straight flush, king high');
   });
 });

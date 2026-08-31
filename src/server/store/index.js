@@ -9,11 +9,13 @@
 import path from 'node:path';
 
 import { config } from '../config.js';
+import { HandLogRepository } from './HandLogRepository.js';
 import { HistoryRepository } from './HistoryRepository.js';
 import { JsonFileStore } from './JsonFileStore.js';
 import { TournamentRepository } from './TournamentRepository.js';
 
 export { DataStore } from './DataStore.js';
+export { HandLogRepository } from './HandLogRepository.js';
 export { HistoryRepository, RECORD_TYPES } from './HistoryRepository.js';
 export { JsonFileStore } from './JsonFileStore.js';
 export { TournamentRepository } from './TournamentRepository.js';
@@ -53,6 +55,29 @@ export async function createTournamentRepository({ dataDir } = {}) {
   });
 
   const repository = new TournamentRepository(store);
+  await repository.init();
+  return repository;
+}
+
+/**
+ * Build and initialise the hand-log repository.
+ *
+ * Deliberately uncapped, unlike history: a saved hand is something the user
+ * deliberately named and kept, so silently evicting the oldest ones the way
+ * `maxHistoryRecords` does to auto-recorded calculations would be data loss.
+ *
+ * @param {object} [options]
+ * @param {string} [options.dataDir] overrides the configured data directory --
+ *   tests pass a temp directory so they never touch real data
+ * @returns {Promise<HandLogRepository>}
+ */
+export async function createHandLogRepository({ dataDir } = {}) {
+  const store = new JsonFileStore({
+    filePath: path.join(dataDir || config.paths.data, 'hands.json'),
+    writeDebounceMs: config.store.writeDebounceMs
+  });
+
+  const repository = new HandLogRepository(store);
   await repository.init();
   return repository;
 }

@@ -267,13 +267,22 @@ export class TournamentService {
 
   /** @param {object} tournament @returns {object} a lightweight shape for list views */
   #summarize(tournament) {
+    // The list says which level a tournament is on, not just that it is
+    // "active", so the clock state is computed here too. It stays a summary:
+    // the current level and the clock's own status, not the whole structure
+    // or the roster.
+    const clock = computeClockState({ structure: tournament.structure, ...tournament.clock });
+
     return {
       id: tournament.id,
       name: tournament.name,
       status: tournament.status,
       createdAt: tournament.createdAt,
       playerCount: tournament.players.length,
-      activePlayerCount: activePlayerCount(tournament.players)
+      activePlayerCount: activePlayerCount(tournament.players),
+      clockStatus: tournament.clock.status,
+      currentLevel: clock.level,
+      isFinalLevel: clock.isFinalLevel
     };
   }
 

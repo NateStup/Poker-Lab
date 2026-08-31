@@ -29,6 +29,31 @@ export const SUIT_META = Object.freeze({
   c: Object.freeze({ code: 'c', symbol: '♣', label: 'Clubs', color: 'black' })
 });
 
+/**
+ * Spoken names for each rank, keyed by the numeric value in `RANK_VALUES` --
+ * which is the form hand scores carry, so anything describing a made hand
+ * ("kings full of queens") can look a tiebreak up directly.
+ *
+ * Both forms are stored because poker says a rank singularly or plurally
+ * depending on the hand ("a queen high flush", "three queens"), and "sixes"
+ * rules out deriving the plural by appending an s.
+ */
+export const RANK_NAMES = Object.freeze({
+  2: Object.freeze({ one: 'two', many: 'twos' }),
+  3: Object.freeze({ one: 'three', many: 'threes' }),
+  4: Object.freeze({ one: 'four', many: 'fours' }),
+  5: Object.freeze({ one: 'five', many: 'fives' }),
+  6: Object.freeze({ one: 'six', many: 'sixes' }),
+  7: Object.freeze({ one: 'seven', many: 'sevens' }),
+  8: Object.freeze({ one: 'eight', many: 'eights' }),
+  9: Object.freeze({ one: 'nine', many: 'nines' }),
+  10: Object.freeze({ one: 'ten', many: 'tens' }),
+  11: Object.freeze({ one: 'jack', many: 'jacks' }),
+  12: Object.freeze({ one: 'queen', many: 'queens' }),
+  13: Object.freeze({ one: 'king', many: 'kings' }),
+  14: Object.freeze({ one: 'ace', many: 'aces' })
+});
+
 /** Number of cards on a complete board (flop + turn + river). */
 export const BOARD_SIZE = 5;
 
