@@ -594,7 +594,7 @@ is `aria-hidden` (it is a drawing), so "Pot:" survives in a
 picture carrying the meaning on screen while the word stays for a screen
 reader.
 
-**Chips being pushed in is animated, and makes a noise.** Stepping forward
+**Chips being pushed in is animated.** Stepping forward
 into a frame where the felt in front of every seat empties is the dealer's
 sweep, and `PokerTable` flies a chip from each seat's bet position to the
 centre for it (`sweepBets`, `CHIP_SWEEP_MS`). Three things about it:
@@ -648,34 +648,30 @@ centre for it (`sweepBets`, `CHIP_SWEEP_MS`). Three things about it:
   off `chipSweepDurationMs` so it lands with the last chip, not the first.
 - A checked-through street sweeps nothing and correctly animates nothing.
 
-The sound (`services/chipSounds.js`) is synthesised with Web Audio rather than
-shipped as an audio file — the same dependency call the rest of the app makes,
-and nothing loads on a page that never plays one. It is a dealer *raking*
-chips in, built in layers:
-
-- **A chip is a pitched clack, and clacks are oscillators — not noise.** Two
-  earlier versions built this out of filtered noise and both sounded like what
-  they were: a long "shh" with ticks in it. A clay disc is a *struck* object —
-  a very short strike, then the disc ringing at a few frequencies that die in
-  well under a tenth of a second. So a clack is three oscillators at
-  **inharmonic** ratios (a disc is not a string) plus a 6ms noise tick for the
-  strike. Pitch is drawn per clack, which is what makes a pile clatter instead
-  of repeating one note.
-- **There is no sustained noise bed.** Density of clacks is what reads as a
-  mass of chips; a bed loud enough to hear is a bed loud enough to be the hiss
-  this twice turned into.
-- **Density and irregularity carry the atmosphere.** Below roughly a dozen
-  knocks the ear picks them out and counts them, and an even spread is heard
-  as a machine. So they are many, and scattered with a squared random so the
-  clatter is thickest as the rake takes hold and thins as chips come to rest.
-- Everything runs through a compressor: two dozen clacks can sum past full
-  scale, and clipping something this bright is a crackle, not a loud chip.
-
-The `AudioContext` is built on the first sweep, not at import: one
-constructed at page load is born `suspended` and silently drops its first
-sound. Muting persists in `localStorage`, and the toggle's speaker is an
-inline SVG for the reason the suit pips are — a glyph is one font
-substitution from being a colour emoji.
+**The felt has a colour, and it is the viewer's.** `services/tableTheme.js`
+holds four themes (emerald is the default and is the table's original green,
+so a viewer who never opens the picker sees no change) behind one
+`localStorage` key, read and written in a try/catch, with a disabled store
+treated as "use the default" rather than an error.
+Two things about it are load-bearing. It is **applied to the document, not
+passed as a prop** — `applyStoredTableTheme` sets `data-table-theme` on
+`<html>` from the bootstrap, before React mounts, and custom properties
+inherit from there to every felt on the page: the replay's, the editor's, and
+any table added later, with `PokerTable` untouched and nothing subscribing to
+anything. A `theme` prop would be a subscription system built to move one
+string, and it would flash the default before correcting itself. And the
+**colours are only in `style.css`**, under `[data-table-theme='...']` blocks —
+the module holds ids and names — because `PokerTable` owns geometry and the
+stylesheet owns paint, and a hex value kept in both files is the drift this
+codebase has a lesson about. The picker's swatches carry their own
+`data-table-theme` and so paint from the identical declaration the felt does,
+which is what stops a swatch advertising a colour the table won't produce.
+`--felt-gradient`/`--rail-gradient` are defined in `:root` as well as in the
+emerald block, so a felt with no background is not what happens if the
+attribute never lands. Only those two surfaces are themed: cards, chips, the
+button chip, equity percentages and seat highlights all carry information — a
+chip's colour is its denomination in big blinds — and recolouring them buys a
+different look with a harder-to-read hand.
 
 The chips are **SVG, not styled `div`s** — same reason as the logo and the back
 arrow. A chip is a shape (an ellipse seen from across the table, with a side
@@ -721,8 +717,42 @@ frame — and does no arithmetic of its own; everything it shows comes out of th
 shared domain. That split is deliberate: a replayer that recomputed the pot as
 it stepped would be the second betting implementation this codebase keeps
 warning about. It holds two further pieces of purely visual state — which
-chips are mid-sweep, and whether sound is muted — neither of which any
-number on the page is derived from.
+chips are mid-sweep, and whether the replay is fullscreen — neither of which
+any number on the page is derived from, and the second of which is a mirror
+of the browser's state rather than state of its own.
+
+**Fullscreen is the browser's, and the replay only mirrors it.** The felt is
+the reason to watch a hand back, so `HandReplay`'s root element can take the
+whole screen — the button in the controls row, or the `F` key. The state that
+matters lives in the browser, not here, and that shapes all of it.
+`isFullscreen` is set *only* from the `fullscreenchange` event, never
+optimistically in the click handler: Escape, the browser's own exit control
+and the element leaving the document all exit fullscreen without going
+through any of this app's code, so a state set on click is wrong the first
+time anyone presses Escape. The event fires for every cause, which makes it
+the only honest source, and it compares `document.fullscreenElement` by
+identity — another element going fullscreen is not this replay going
+fullscreen. The *styling* doesn't read that state at all: the stylesheet
+matches the `:fullscreen` pseudo-class, which cannot disagree with the
+browser even for the frame before a state update lands, so `isFullscreen`
+exists only to pick which icon the button draws. The button is hidden
+outright where `document.fullscreenEnabled` is false — iPhone Safari, which
+implements fullscreen for `<video>` and nothing else — because a button that
+does nothing when pressed is worse than no button. Both `requestFullscreen`
+and `exitFullscreen` return promises that reject when the browser refuses;
+the rejection is swallowed, because no `fullscreenchange` fires, the state
+stays false, and the button goes on offering to enter fullscreen, which is an
+accurate description of what happened. There is no teardown calling
+`exitFullscreen` — a fullscreen element removed from the document exits on
+its own. The timeline is hidden in fullscreen so the felt keeps the screen:
+nothing becomes unreachable (the scrubber, the arrow keys and the jump
+buttons still step the same frames), but jumping straight to one beat by name
+is lost, which is a real cost and the reason it is a judgement call.
+The table is sized by height only in fullscreen. Width follows from aspect-ratio, and --table-aspect carries the same TABLE_SHAPE number the inline aspectRatio does, so the ratio is written down once. Constraining width at both ends instead, with flex assigning a definite height, lets the box stop being the ratio toCss assumes when it places seats, and the seats go off the rail by construction. One constrained dimension is what makes that impossible rather than unlikely.
+
+The clamps read 100cqi, not 100vw. The container is the viewport minus its own scrollbar, and on a screen short enough to scroll vertically a vw-based floor is too wide by exactly the scrollbar's width: a horizontal scrollbar caused by a vertical one. Note also that a percentage in max-height resolves against the container's height, which is the wrong axis for a width cap and computed to about 369px at 1280x720 before it was replaced. It only failed to bite because min-height wins that conflict.
+
+container-type: inline-size implies containment, which this file has been bitten by once before (see the isolation: isolate note on body). It was checked rather than assumed: screenshots after a tall-to-short navigation are byte-identical to a fresh load of the same page. Containment applies only while :fullscreen. Two measurement traps found along the way: headless Chrome reports a 0px scrollbar because of overlay scrollbars, so the scrollbar case must be run headed, and getComputedStyle().contain reports none even when container-type is set, so it is not a usable signal for whether containment is active.
 
 **Motion is always confirmation, never information.** Everything animated
 here restates something the frame already shows, so

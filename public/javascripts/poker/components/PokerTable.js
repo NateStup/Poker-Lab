@@ -240,7 +240,17 @@ export function PokerTable({
 
   return e(
     'div',
-    { className: 'poker-table', style: { aspectRatio: String(shape.aspect) } },
+    {
+      className: 'poker-table',
+      style: {
+        aspectRatio: String(shape.aspect),
+        // Exposed so the stylesheet can size the table by height without
+        // restating the ratio. TABLE_SHAPE stays the only place it is
+        // written down, which is the same reason the aspect ratio itself is
+        // applied here rather than in the stylesheet.
+        '--table-aspect': String(shape.aspect)
+      }
+    },
     e(
       'div',
       {

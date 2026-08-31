@@ -20,7 +20,7 @@ import {
   isRunoutSpot,
   runoutEquity
 } from '/shared/handLog/index.js';
-import { isChipSoundMuted, playChipSweep, setChipSoundMuted } from '../services/chipSounds.js';
+import { TABLE_THEMES, getTableTheme, setTableTheme } from '../services/tableTheme.js';
 import { AllInEquity } from './AllInEquity.js';
 import { PlayingCard } from './PlayingCard.js';
 import { PokerTable, chipSweepDurationMs } from './PokerTable.js';
@@ -102,48 +102,90 @@ function prefersReducedMotion() {
 }
 
 /**
- * The speaker, drawn rather than typed.
+ * Enter or leave fullscreen.
  *
- * A glyph would be one font substitution away from a colour emoji -- the same
- * trap the suit pips and the back arrow already document. An icon that changes
- * shape per machine is not an icon.
+ * Hidden outright where the API is unavailable rather than rendered dead.
+ * `document.fullscreenEnabled` is false on iPhone Safari, which implements
+ * fullscreen for `<video>` and nothing else, and a button that does nothing
+ * when pressed is worse than no button at all.
+ *
+ * The icon is an inline SVG for the reason the back arrow and the suit pips
+ * are: a glyph is one font substitution away from being a colour emoji.
  *
  * @param {object} props
- * @param {boolean} props.muted
+ * @param {boolean} props.isFullscreen
+ * @param {() => void} props.onToggle
  */
-function SoundToggle({ muted, onToggle }) {
+function FullscreenToggle({ isFullscreen, onToggle }) {
+  if (document.fullscreenEnabled !== true) return null;
+
   return e(
     'button',
     {
       type: 'button',
-      className: 'ghost-button hand-replay-sound',
+      className: 'ghost-button hand-replay-fullscreen',
       onClick: onToggle,
-      'aria-pressed': muted,
-      'aria-label': muted ? 'Turn chip sounds on' : 'Turn chip sounds off',
-      title: muted ? 'Chip sounds off' : 'Chip sounds on'
+      'aria-pressed': isFullscreen,
+      'aria-label': isFullscreen ? 'Leave fullscreen' : 'Replay fullscreen',
+      title: isFullscreen ? 'Leave fullscreen (F)' : 'Fullscreen (F)'
     },
     e(
       'svg',
       { viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': 'true', focusable: 'false' },
       e('path', {
-        d: 'M4 9v6h4l5 4V5L8 9H4z',
-        fill: 'currentColor'
-      }),
-      muted
-        ? e('path', {
-            d: 'M16 9l5 6M21 9l-5 6',
-            stroke: 'currentColor',
-            strokeWidth: 2,
-            strokeLinecap: 'round',
-            fill: 'none'
-          })
-        : e('path', {
-            d: 'M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12',
-            stroke: 'currentColor',
-            strokeWidth: 2,
-            strokeLinecap: 'round',
-            fill: 'none'
-          })
+        d: isFullscreen
+          ? 'M10 4v6H4M14 4v6h6M10 20v-6H4M14 20v-6h6'
+          : 'M4 10V4h6M20 10V4h-6M4 14v6h6M20 14v6h-6',
+        stroke: 'currentColor',
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        fill: 'none'
+      })
+    )
+  );
+}
+
+/**
+ * The felt picker: one swatch per theme.
+ *
+ * The current id is state here rather than in {@link HandReplay} because
+ * nothing on the page is derived from it -- the colour reaches every table
+ * through a data attribute on the document, so this component's only reason to
+ * re-render is to move the ring onto the swatch that was just clicked.
+ *
+ * Each swatch carries its own `data-table-theme`, which is what paints it: it
+ * matches the same `[data-table-theme='...']` rule the felt does, so a swatch
+ * cannot advertise a colour the table will not produce. That is also why there
+ * is no colour value in this file.
+ */
+function ThemePicker() {
+  const [theme, setTheme] = React.useState(getTableTheme);
+
+  return e(
+    'div',
+    { className: 'hand-replay-themes', role: 'group', 'aria-label': 'Table theme' },
+    TABLE_THEMES.map(({ id, name }) =>
+      e(
+        'button',
+        {
+          key: id,
+          type: 'button',
+          className: `table-theme-swatch ${id === theme ? 'is-active' : ''}`,
+          'data-table-theme': id,
+          'aria-pressed': id === theme,
+          // The preference is the viewer's, not the hand's, so it is worth
+          // saying that switching here also repaints the editor's table.
+          title: `${name} felt · applies to every table`,
+          onClick: () => {
+            setTableTheme(id);
+            setTheme(id);
+          }
+        },
+        // The swatch is a colour and nothing else, so the name is the only
+        // thing a screen reader has to go on.
+        e('span', { className: 'visually-hidden' }, name)
+      )
     )
   );
 }
@@ -209,6 +251,53 @@ export function HandReplay({ hand, positions }) {
     [frames.length]
   );
 
+  const containerRef = React.useRef(null);
+  // Set only from `fullscreenchange`, never from the click handler. Escape,
+  // the browser's own exit control and the element leaving the document all
+  // exit fullscreen without going through anything here, so a state set
+  // optimistically on click is wrong the first time anyone presses Escape.
+  // The event fires for every cause, which is what makes it the only honest
+  // source. Note the styling does not read this at all -- the stylesheet
+  // matches `:fullscreen`, which cannot disagree with the browser even for
+  // the frame before this lands. This exists to pick an icon.
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
+
+  React.useEffect(() => {
+    function sync() {
+      // Identity, not truthiness: another element on the page going
+      // fullscreen is not this replay going fullscreen.
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    }
+
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+
+  // No teardown calling exitFullscreen: a fullscreen element removed from the
+  // document exits fullscreen automatically, so navigating away mid-replay
+  // needs nothing from here.
+  //
+  // Declared above the keydown effect rather than beside the other visual
+  // state below, because that effect lists it as a dependency -- a dependency
+  // array is evaluated during render, so a `const` declared further down would
+  // still be in its temporal dead zone and throw on every render.
+  const toggleFullscreen = React.useCallback(() => {
+    const node = containerRef.current;
+    if (!node) return;
+
+    // Both of these return promises that reject on a request the browser
+    // refuses (no user gesture, a permissions policy, an iframe without
+    // `allow="fullscreen"`). Nothing is announced on a rejection because
+    // nothing needs to be: no `fullscreenchange` fires, the state stays
+    // false, and the button goes on offering to enter fullscreen, which is
+    // an accurate description of the situation.
+    if (document.fullscreenElement === node) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      node.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
   React.useEffect(() => {
     function handleKeyDown(event) {
       // Arrow keys belong to whatever the user is typing in, if anything.
@@ -221,18 +310,19 @@ export function HandReplay({ hand, positions }) {
       } else if (event.key === 'ArrowLeft') {
         event.preventDefault();
         setStep(current => Math.max(0, current - 1));
+      } else if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault();
+        toggleFullscreen();
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [frames.length]);
+  }, [frames.length, toggleFullscreen]);
 
-  // Chips in flight, and the preference for whether that makes a noise.
-  // `sweep` is `{bets, from}`: the chips travelling, and the frame the table
-  // goes on showing while they travel. See `shownFrame`.
+  // Chips in flight: `sweep` is `{bets, from}` -- the chips travelling, and
+  // the frame the table goes on showing while they travel. See `shownFrame`.
   const [sweep, setSweep] = React.useState(null);
-  const [muted, setMuted] = React.useState(isChipSoundMuted);
   const previousIndex = React.useRef(index);
 
   // `useLayoutEffect`, emphatically not `useEffect`.
@@ -265,13 +355,11 @@ export function HandReplay({ hand, positions }) {
     }
 
     const bets = frames[from].bets;
-    // Counted in stacks moving, not chips: that is what the rake is of.
-    playChipSweep(bets.filter(bet => bet > 0).length);
 
     // Nothing is held back for someone who has asked for less motion: the
     // sweep exists to show chips travelling, and with the travel removed all
     // that is left is a second of the table sitting on the previous frame for
-    // no visible reason. They get the new frame immediately, and still hear it.
+    // no visible reason. They get the new frame immediately.
     if (prefersReducedMotion()) {
       setSweep(null);
       return undefined;
@@ -290,13 +378,6 @@ export function HandReplay({ hand, positions }) {
   // A hand swapped underneath the player leaves chips flying between two
   // tables that no longer relate to each other.
   React.useEffect(() => setSweep(null), [hand]);
-
-  function toggleMuted() {
-    setMuted(current => {
-      setChipSoundMuted(!current);
-      return !current;
-    });
-  }
 
   const isFirst = index === 0;
   const isLast = index === frames.length - 1;
@@ -356,7 +437,7 @@ export function HandReplay({ hand, positions }) {
 
   return e(
     'div',
-    { className: 'hand-replay' },
+    { className: 'hand-replay', ref: containerRef },
 
     e(
       'div',
@@ -431,7 +512,8 @@ export function HandReplay({ hand, positions }) {
         type: 'button', className: 'ghost-button', onClick: () => goTo(frames.length - 1), disabled: isLast,
         'aria-label': 'Jump to the end'
       }, '>|'),
-      e(SoundToggle, { muted, onToggle: toggleMuted })
+      e(FullscreenToggle, { isFullscreen, onToggle: toggleFullscreen }),
+      e(ThemePicker, null)
     ),
 
     e(
