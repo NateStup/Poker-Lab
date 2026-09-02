@@ -71,7 +71,7 @@ export class HistoryRepository {
     return this.store.list({
       limit,
       offset,
-      where: type ? record => record.type === type : undefined
+      where: type ? { type } : undefined
     });
   }
 

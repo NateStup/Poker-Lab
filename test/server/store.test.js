@@ -77,9 +77,9 @@ describe('JsonFileStore', () => {
     assert.equal(page.items[0].label, 'second');
   });
 
-  it('filters with a predicate', async () => {
+  it('filters on field equality', async () => {
     await store.insert({ type: 'simulation', label: 'sim' });
-    const page = await store.list({ where: record => record.type === 'simulation' });
+    const page = await store.list({ where: { type: 'simulation' } });
 
     assert.equal(page.total, 1);
     assert.equal(page.items[0].label, 'sim');

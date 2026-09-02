@@ -11,6 +11,7 @@ import http from 'node:http';
 
 import { createApp } from './app.js';
 import { config } from './config.js';
+import { closePool } from './store/postgres/pool.js';
 
 const app = await createApp();
 const server = http.createServer(app);
@@ -64,6 +65,15 @@ async function shutdown(signal) {
     } catch (error) {
       console.error('Failed to flush a data store:', error.message);
     }
+  }
+
+  // Unconditional: a `PostgresStore` deliberately closes nothing per-instance,
+  // since the pool is shared, and `closePool()` no-ops when the json driver
+  // never opened one -- so there is no driver check to get wrong here.
+  try {
+    await closePool();
+  } catch (error) {
+    console.error('Failed to close the database pool:', error.message);
   }
 
   process.exit(0);

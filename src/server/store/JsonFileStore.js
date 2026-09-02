@@ -163,13 +163,14 @@ export class JsonFileStore extends DataStore {
    * @param {object} [query]
    * @param {number} [query.limit=50]
    * @param {number} [query.offset=0]
-   * @param {(record: object) => boolean} [query.where] in-memory predicate
+   * @param {Record<string, unknown>} [query.where] field-equals-value pairs,
+   *   matched in memory -- see {@link matchesAll}
    * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
    */
   async list({ limit = 50, offset = 0, where } = {}) {
     await this.init();
 
-    const matching = where ? this.records.filter(where) : this.records;
+    const matching = where ? this.records.filter(record => matchesAll(record, where)) : this.records;
     // Records are appended chronologically; callers want most-recent first.
     const ordered = matching.slice().reverse();
 
@@ -304,4 +305,13 @@ export class JsonFileStore extends DataStore {
       console.warn(`[store] ${this.filePath} was unreadable and could not be quarantined:`, error.message);
     }
   }
+}
+
+/**
+ * @param {object} record
+ * @param {Record<string, unknown>} where
+ * @returns {boolean}
+ */
+function matchesAll(record, where) {
+  return Object.entries(where).every(([field, value]) => record[field] === value);
 }
