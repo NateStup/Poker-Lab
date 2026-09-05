@@ -50,11 +50,29 @@ export const config = Object.freeze({
     driver: process.env.STORE_DRIVER || 'postgres'
   }),
 
+  auth: Object.freeze({
+    /** Signs the session cookie. The literal fallback is fine for local dev,
+     *  where anyone reading it already has full access to the machine; it
+     *  must never be the value in anything reachable from outside localhost. */
+    sessionSecret: process.env.SESSION_SECRET || 'dev-only-insecure-session-secret',
+    sessionTtlMs: Number.parseInt(process.env.SESSION_TTL_MS || String(30 * 24 * 60 * 60 * 1000), 10)
+  }),
+
   logging: Object.freeze({
     /** morgan format; `dev` is noisy but useful locally, `combined` suits deployment. */
     format: process.env.LOG_FORMAT || (process.env.NODE_ENV === 'production' ? 'combined' : 'dev')
   })
 });
+
+// Runs once, at import time, the same way `loadEnvFile` above does -- a
+// process that would sign session cookies with the publicly-known default
+// should fail to start, not serve forgeable sessions until someone notices.
+if (config.env === 'production' && !process.env.SESSION_SECRET) {
+  throw new Error(
+    'SESSION_SECRET must be set in production -- refusing to sign session ' +
+    'cookies with the publicly-known development default.'
+  );
+}
 
 /** @returns {boolean} true when running outside production */
 export function isDevelopment() {

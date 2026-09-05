@@ -455,12 +455,43 @@ hand, and it is where the odds calculator's engine meets the hand logger:
 
 `DataStore` (abstract) → **two** implementations — `JsonFileStore` (a JSON file
 per collection) and `PostgresStore` (a table per collection) — → a repository
-per record type (`HistoryRepository`, `TournamentRepository`,
-`HandLogRepository`), each exposing a domain-level API over whichever store it
-was handed. Services depend on the repository, never on a concrete store, which
-is what made the Postgres swap a new class plus a branch in
+per record type (`HistoryRepository`, `TournamentRepository`), each exposing a
+domain-level API over whichever store it was handed. Services depend on the
+repository, never on a concrete store, which is what made the Postgres swap a
+new class plus a branch in
 [src/server/store/index.js](src/server/store/index.js) rather than a change
 anywhere upstream.
+
+**`HandLogRepository` is no longer one of them.** It writes SQL against the
+pool directly, because `hands` is the one collection with a real relationship
+to model (an owner) and a real capability to check (a share token), and a JSONB
+envelope through a generic store has no way to say "this field is a column, not
+part of the blob." That is the same shift `PostgresStore` earned over
+`JsonFileStore`, applied one layer up: general-purpose storage for
+`history`/`tournaments`, purpose-built storage for the collection that
+actually needs it. Two consequences worth knowing:
+
+- **The hand logger is Postgres-only.** `createHandLogRepository` throws at
+  boot under `STORE_DRIVER=json` instead of starting with the feature
+  quietly broken — there is no honest "hand logging with no accounts" mode
+  left to fall back to. `history` and `tournaments` keep their driver branch
+  and their `dataDir` option exactly as they were.
+- **A malformed id has to be caught, not thrown.** `id` and `user_id` are
+  `uuid` columns, so a caller-supplied string that was never a real id raises
+  Postgres `22P02` rather than simply matching nothing. `#queryOrMiss` turns
+  that one error code into an empty result, so `GET /api/hands/not-a-real-id`
+  is a 404 like any other miss instead of a 500 with a stack trace. It wraps
+  the four methods that compare against `id`/`user_id` — `findOwned`,
+  `update`, `remove`, `setShareToken` — and deliberately not `listForOwner`
+  (its `userId` comes from an authenticated session, never a path param) or
+  `findByShareToken` (`share_token` is `text`; nothing about it can fail to
+  parse).
+
+`UsersRepository` and `SessionsRepository` are the same shape and Postgres-only
+for the same reason — `users` exists to be joined against, which is the one
+thing a JSONB envelope has nothing to offer. Both are synchronous to construct:
+there is no generic store underneath to `init()`, and no JSON-file equivalent
+of an account, ever.
 
 `JsonFileStore` guards three specific failure modes; don't regress them:
 
@@ -547,6 +578,24 @@ something to reimplement per-insert.
 - Store and API tests must use a temp directory (`fs.mkdtemp`) — never touch
   `data/`. The Postgres equivalent is a throwaway table created in `before`
   and dropped in `after` — never the real `history`/`tournaments`/`hands`.
+- **The hand-log tests are the one exception, and it is a real one.** None of
+  `HandLogRepository`/`UsersRepository`/`SessionsRepository` take a table name
+  the way `PostgresStore` does, so there is nothing to point somewhere
+  disposable. `handLogRepository.test.js` gets around it one level up, with a
+  throwaway *schema* and `search_path` on its own pool, and touches nothing
+  real. `api.test.js` cannot — the app builds those repositories on the shared
+  pool — so its `/api/hands` block writes to the **real `users`, `sessions`
+  and `hands` tables**. Isolation there is by ownership: every test signs up
+  its own account with a random email and only ever reads its own rows. The
+  `/api/hands cleanup` block is what keeps that honest, comparing row counts
+  against a baseline captured before the block ran. It is a separate suite
+  rather than an assertion in an `after` hook on purpose: node:test prints a
+  failing hook as `not ok` but leaves `# fail` at 0 and the exit code at 0, so
+  an assertion in a hook cannot fail the run. Verified by leaking one account
+  deliberately and watching it go red.
+- Both hand-log files skip with a reason when no database answers, same probe
+  as `postgresStore.test.js`, so `npm test` still passes with Docker down —
+  381 of the 428 tests run in that case.
 - API tests boot the real app on an ephemeral port and drive it with `fetch`.
 - `postgresStore.test.js` asserts the *same* things `store.test.js` does, on
   the other implementation — that is the only evidence the two stores actually
@@ -1018,6 +1067,10 @@ waits at `0:00` rather than silently skipping levels in the background.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/health` | Liveness probe |
+| `POST` | `/api/auth/signup` | Create an account; sets the session cookie |
+| `POST` | `/api/auth/login` | Log in; sets the session cookie |
+| `POST` | `/api/auth/logout` | Destroy the session; idempotent |
+| `GET` | `/api/auth/me` | The logged-in user |
 | `POST` | `/api/equity` | Calculate equity; records history |
 | `POST` | `/api/ranges/equity` | Range-vs-hand or range-vs-range equity; not recorded to history |
 | `GET` | `/api/history` | Page of records, newest first (`limit`, `offset`, `type`) |
@@ -1037,13 +1090,54 @@ waits at `0:00` rather than silently skipping levels in the background.
 | `PATCH` | `/api/tournaments/:id/players/:playerId` | `{action: 'rebuy'\|'addon'\|'eliminate'\|'reinstate'}` |
 | `PATCH` | `/api/tournaments/:id/clock` | `{action: 'start'\|'pause'\|'resume'\|'advance'\|'setLevel', levelIndex?}` |
 | `POST` | `/api/hands` | Save a logged hand |
-| `GET` | `/api/hands` | List saved hands (lightweight summaries) |
+| `GET` | `/api/hands` | List saved hands (lightweight summaries), this account's only |
 | `GET` | `/api/hands/:id` | Full record, decorated with `derived` (positions, pot progression, payouts) |
 | `PATCH` | `/api/hands/:id` | Edit a saved hand; merged over the stored record, then validated in full |
 | `DELETE` | `/api/hands/:id` | Delete a saved hand |
+| `POST` | `/api/hands/:id/share` | Issue (or replace) the hand's share token |
+| `DELETE` | `/api/hands/:id/share` | Revoke it, leaving the hand itself alone |
+| `GET` | `/api/shared-hands/:token` | The public view of a shared hand; no session, ever |
 
 Everything under `/api`. Non-API paths fall through to `index.html` so
 client-side routing survives a hard refresh; API 404s stay real 404s.
+
+**Every `/api/hands` route requires a session**, applied as one
+`router.use(requireAuth)` over the whole router rather than route by route,
+because there is no hand operation left that means anything without an owner.
+`/api/shared-hands` is a *separate router in a separate file* with no auth
+anywhere near it — not a route on the hand-log router with the check skipped —
+so a route added later cannot inherit public access by accident.
+
+### Who a hand belongs to
+
+A hand's **id is private to its owner**. `HandLogRepository` folds the caller
+into the query itself (`WHERE id = $1 AND user_id = $2`) rather than fetching
+a row and checking ownership afterwards, so a hand that isn't yours does not
+exist as far as any of those methods are concerned — which is what makes
+"not found" the honest answer rather than a deliberately vague one.
+
+That answer is **404, not 403, on every verb including `GET`**. A 403 would
+confirm the hand exists, which is precisely the thing a stranger holding an id
+should not be able to learn; the distinction between "no such hand" and "not
+yours" is the leak this design closes, so the two are deliberately
+indistinguishable from outside.
+
+A **share token** is the only other way in. It is a second, independent
+identifier — generated only when the owner asks, revocable by clearing it
+without touching the hand — and it is looked up by `share_token` alone,
+never by id. `getShared` strips the token from what it returns: a viewer
+following a link has no reason to see the value that let them in. Whether a
+token was never issued or has been revoked, the answer is the same 404.
+
+Sessions are a signed `httpOnly` cookie, not a bearer header: this is a
+same-origin app serving its own client, and a cookie a script cannot read
+beats a token sitting in `localStorage`. `SESSION_SECRET` signs it, and the
+server **refuses to start in production without one** rather than signing
+with the publicly-known development default.
+
+Note what this replaces: the old `?share=1` plus `localStorage` scheme was
+explicitly "what the page offers, not what the server permits." This is the
+server permitting, and the difference is the whole point.
 
 ## Roadmap
 

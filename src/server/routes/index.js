@@ -8,10 +8,12 @@
 
 import { Router } from 'express';
 
+import { createAuthRouter } from './authRoutes.js';
 import { createEquityRouter } from './equityRoutes.js';
 import { createHandLogRouter } from './handLogRoutes.js';
 import { createHistoryRouter } from './historyRoutes.js';
 import { createRangeRouter } from './rangeRoutes.js';
+import { createSharedHandRouter } from './sharedHandRoutes.js';
 import { createTournamentRouter } from './tournamentRoutes.js';
 
 /**
@@ -20,11 +22,23 @@ import { createTournamentRouter } from './tournamentRoutes.js';
  *   rangeService: import('../services/RangeService.js').RangeService,
  *   tournamentService: import('../services/TournamentService.js').TournamentService,
  *   handLogService: import('../services/HandLogService.js').HandLogService,
+ *   authService: import('../services/AuthService.js').AuthService,
+ *   sessionsRepository: import('../store/SessionsRepository.js').SessionsRepository,
+ *   requireAuth: import('express').RequestHandler,
  *   historyRepository: import('../store/HistoryRepository.js').HistoryRepository
  * }} deps
  * @returns {import('express').Router}
  */
-export function createApiRouter({ equityService, rangeService, tournamentService, handLogService, historyRepository }) {
+export function createApiRouter({
+  equityService,
+  rangeService,
+  tournamentService,
+  handLogService,
+  authService,
+  sessionsRepository,
+  requireAuth,
+  historyRepository
+}) {
   const router = Router();
 
   /** Liveness probe -- useful locally and required by most hosting platforms. */
@@ -32,10 +46,14 @@ export function createApiRouter({ equityService, rangeService, tournamentService
     res.json({ status: 'ok', uptime: process.uptime() });
   });
 
+  router.use('/auth', createAuthRouter({ authService, sessionsRepository }));
   router.use('/equity', createEquityRouter({ equityService }));
   router.use('/ranges', createRangeRouter({ rangeService }));
   router.use('/tournaments', createTournamentRouter({ tournamentService }));
-  router.use('/hands', createHandLogRouter({ handLogService }));
+  router.use('/hands', createHandLogRouter({ handLogService, requireAuth }));
+  // Mounted at its own path, not as an exception carved out of /hands -- see
+  // the header comment in sharedHandRoutes.js for why that separation matters.
+  router.use('/shared-hands', createSharedHandRouter({ handLogService }));
   router.use('/history', createHistoryRouter({ historyRepository }));
 
   return router;

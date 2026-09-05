@@ -49,6 +49,14 @@ export class ApiError extends Error {
   }
 
   /**
+   * 401 -- no valid session, or the request presented no credentials at all.
+   * @param {string} [message]
+   */
+  static unauthorized(message = 'Authentication required') {
+    return new ApiError(401, message, { code: 'UNAUTHORIZED' });
+  }
+
+  /**
    * 422 -- syntactically valid but semantically impossible.
    * @param {string} message
    * @param {string[]} [details]
