@@ -1,7 +1,9 @@
 /**
- * Site title and primary navigation, shared by every page.
+ * Site title, primary navigation, and the account corner -- shared by every
+ * page.
  */
 
+import { useAuth } from '../context/AuthContext.js';
 import { Link } from '../router.js';
 import { SpadeMark } from './Logo.js';
 
@@ -19,6 +21,8 @@ const NAV_LINKS = Object.freeze([
  * @param {{path: string}} props the current `location.pathname`, from `useRoute`
  */
 export function Nav({ path }) {
+  const { status, user, logout } = useAuth();
+
   return e(
     'div',
     { className: 'site-header-inner' },
@@ -42,6 +46,24 @@ export function Nav({ path }) {
           )
         )
       )
-    )
+    ),
+    // Nothing rendered while the initial /api/auth/me check is in flight --
+    // a page-load flash of "Log in" that then swaps to an account name reads
+    // as more broken than a briefly empty corner.
+    status === 'authenticated'
+      ? e(
+          'div',
+          { className: 'nav-account' },
+          e('span', { className: 'small' }, user.displayName),
+          e('button', { type: 'button', className: 'ghost-button', onClick: logout }, 'Log out')
+        )
+      : status === 'anonymous'
+        ? e(
+            'div',
+            { className: 'nav-account' },
+            e(Link, { to: '/login', className: 'ghost-button' }, 'Log in'),
+            e(Link, { to: '/signup', className: 'ghost-button' }, 'Sign up')
+          )
+        : null
   );
 }

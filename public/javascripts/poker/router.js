@@ -110,9 +110,11 @@ export function useRoute() {
  * Read one query-string parameter, re-reading it on every navigation.
  *
  * Query handling lives here rather than in the page that wants it so there is
- * still exactly one module that touches `window.location` -- the Hand Logger's
- * share links (`/hands/:id?share=1`) are the first thing to need a parameter,
- * and they shouldn't be the reason a page starts reaching for the URL itself.
+ * still exactly one module that touches `window.location` -- the login
+ * redirect's `?next=` (read by `useAuthRedirectTarget` in
+ * `context/AuthContext.js`, written by `RequireAuth` when it turns someone
+ * away) is what needs a parameter, and it shouldn't be the reason a page
+ * starts reaching for the URL itself.
  *
  * @param {string} name
  * @returns {string|null}
