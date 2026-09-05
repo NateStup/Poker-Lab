@@ -23,6 +23,21 @@ export class ApiRequestError extends Error {
   }
 }
 
+const unauthorizedListeners = new Set();
+
+/**
+ * Subscribe to "a request just came back 401." `AuthContext` is the reader;
+ * this module is the one place that sees every request, so it's the one
+ * place that can notice a session ending regardless of which page's call
+ * triggered it -- the same shape `router.js` uses for navigation listeners.
+ * @param {() => void} listener
+ * @returns {() => void} unsubscribe
+ */
+export function onUnauthorized(listener) {
+  unauthorizedListeners.add(listener);
+  return () => unauthorizedListeners.delete(listener);
+}
+
 /**
  * Perform a JSON request and unwrap the response.
  * @param {string} url
@@ -49,6 +64,16 @@ async function request(url, options = {}) {
 
   if (!response.ok) {
     const error = body?.error || {};
+
+    // Every 401 notifies, including one from a login attempt with the wrong
+    // password. That needs no special case: nobody was logged in to log out
+    // of, so `AuthContext` is already anonymous and the notification lands
+    // on nothing. Telling "was already logged out" from "just got logged
+    // out" is the listener's business, not this module's.
+    if (response.status === 401) {
+      for (const listener of unauthorizedListeners) listener();
+    }
+
     throw new ApiRequestError(error.message || `Request failed with status ${response.status}`, {
       status: response.status,
       code: error.code,
@@ -152,6 +177,65 @@ export function updateHand(id, patch) {
  */
 export function deleteHand(id) {
   return request(`/api/hands/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/**
+ * Generate (or replace) a hand's share link.
+ * @param {string} id
+ * @returns {Promise<object>} the hand, decorated, including the new `shareToken`
+ */
+export function shareHand(id) {
+  return request(`/api/hands/${encodeURIComponent(id)}/share`, { method: 'POST' });
+}
+
+/**
+ * Revoke a hand's share link, leaving the hand itself untouched.
+ * @param {string} id
+ * @returns {Promise<null>}
+ */
+export function unshareHand(id) {
+  return request(`/api/hands/${encodeURIComponent(id)}/share`, { method: 'DELETE' });
+}
+
+/**
+ * Fetch a shared hand by its token. Public -- no session required, and
+ * ownership is meaningless here since the whole point is that this works for
+ * someone who isn't the owner.
+ * @param {string} token
+ * @returns {Promise<object>} the hand, decorated, with no `shareToken` in it
+ */
+export function fetchSharedHand(token) {
+  return request(`/api/shared-hands/${encodeURIComponent(token)}`);
+}
+
+/**
+ * Create an account and start a session.
+ * @param {{email: string, password: string, displayName: string}} payload
+ * @returns {Promise<{user: object}>}
+ */
+export function signup(payload) {
+  return request('/api/auth/signup', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+/**
+ * @param {{email: string, password: string}} credentials
+ * @returns {Promise<{user: object}>}
+ */
+export function login(credentials) {
+  return request('/api/auth/login', { method: 'POST', body: JSON.stringify(credentials) });
+}
+
+/** @returns {Promise<null>} */
+export function logout() {
+  return request('/api/auth/logout', { method: 'POST' });
+}
+
+/**
+ * The currently logged-in user, or a rejected promise if there isn't one.
+ * @returns {Promise<{user: object}>}
+ */
+export function fetchCurrentUser() {
+  return request('/api/auth/me');
 }
 
 /**

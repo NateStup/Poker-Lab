@@ -618,25 +618,30 @@ compatible.
 
 Client structure: `main.js` (bootstrap) → `AppShell.js` (page shell: nav +
 route switch) → `pages/` (one component per route, owns that page's state) →
-`components/` (presentational) + `hooks/` (stateful logic) + `services/`
-(API access). All fetch calls go through `services/apiClient.js`, which
+`components/` (presentational) + `hooks/` (stateful logic) + `context/`
+(state more than one branch of the tree has to agree on — currently just
+auth) + `services/` (API access). All fetch calls go through `services/apiClient.js`, which
 normalises the server's `{error: {message, details}}` shape into thrown
 `ApiRequestError`s — components only ever handle exceptions.
 
-**Routing.** Five routes (`/` → Odds Calculator, `/ranges` → Range Explorer,
+**Routing.** Eight routes (`/` → Odds Calculator, `/ranges` → Range Explorer,
 `/tournament` → Tournament Manager, `/hands` → Hand Logger, `/hands/:id` →
-one saved hand) still don't justify a router dependency, so `router.js` is a
-~50-line hand-rolled one: a `useRoute()` hook backed by
+one saved hand, `/shared/:token` → a hand someone shared, `/login` and
+`/signup` → the same `AuthPage` in two modes) still don't justify a router
+dependency, so `router.js` is a ~50-line hand-rolled one: a `useRoute()` hook backed by
 `history.pushState`/`popstate`, and a `Link` component that intercepts a
 plain left click. This is what "minimise dependencies" (see Conventions)
 looks like in practice — reach for a library when the hand-written version
 stops being trivial, not before.
 
-`/hands/:id` is the first route carrying a parameter, and it needed no
+`/hands/:id` was the first route carrying a parameter, and it needed no
 router change at all: `useRoute()` already returns the raw pathname, so
-`AppShell.pageFor` does one `startsWith` and slices the id off. Share links
-(`?share=1`) did add one thing — `useSearchParam` — kept in `router.js` so
-`window.location` still has exactly one reader.
+`AppShell.pageFor` slices the segment off. `/shared/:token` is the second,
+and it needed none either — both go through one `segmentAfter(path, prefix)`
+helper rather than each growing its own slightly different "strip the prefix,
+decode, treat empty as none" rule. The login redirect's `?next=` is what
+added `useSearchParam`, kept in `router.js` so `window.location` still has
+exactly one reader.
 
 **Where a navigation lands is the app's call, not the browser's.**
 `router.js` sets `history.scrollRestoration = 'manual'` and scrolls to the top
@@ -672,8 +677,8 @@ that can be arrived at from somewhere else, replacing a set of text buttons
 ("Back to list", "All hands") that each named a destination and so had to be
 reworded — or be wrong — the moment a page could be reached from two places.
 It defaults to `goBack(fallback)`, which pops history *only if this app pushed
-an entry* (`router.js` counts them): a shared link opened in a fresh tab has
-nothing to pop, and `history.back()` there would throw the user out of the app
+an entry* (`router.js` counts them): a deep link opened cold in a fresh tab
+has nothing to pop, and `history.back()` there would throw the user out of the app
 entirely, so it navigates to the fallback instead. The Tournament Manager
 passes `onClick` instead, because its list is state rather than a route. The
 arrow is an inline SVG, not a glyph — see the suit-pip note below for why
@@ -925,19 +930,64 @@ so no dependency is added), stepping the replay, sampling computed
 for anything visual: sample the DOM across the animation and read the
 picture. "The logic is right" is not evidence that the screen is.
 
-**View-only shared hands.** View-only is for the person a hand was *shared
-with*, and nobody else. Two conditions have to line up for it: the link says
-it was shared (`?share=1`, which is what the copy-link button hands out), and
-this browser isn't the one that logged the hand (`services/handOwnership.js`,
-which keeps created ids in `localStorage` — "author" without accounts can only
-mean "logged from this browser"). So the author keeps edit and delete on their
-own hand even following their own share link, and a hand opened from the list
-is never locked, including ones logged before authorship was tracked at all.
-**This decides what the page offers, not what the server permits** — the API
-has no notion of an owner, and the flag is a URL edit away from being removed.
-It is the honest version of the feature until there are real accounts; don't
-mistake it for access control, and don't build anything on it that needs
-enforcing.
+**A hand has two pages, because it has two lookups.** `/hands/:id` is the
+owner's, gated by `RequireAuth` in `AppShell.pageFor` — at the route table,
+so one place decides which routes need a session rather than each page
+checking for itself. `/shared/:token` is public: its own route, its own page
+(`SharedHandPage`), hitting its own endpoint (`GET /api/shared-hands/:token`).
+
+The split is not a frontend preference; it follows the server, where a hand's
+id stopped being publicly readable and a share token became the only other
+way in (see **Who a hand belongs to** under API). Once those are two different
+lookups on the server, one page switching on a flag would have been a single
+component pretending two unrelated fetches were one — and the flag would have
+been the client's opinion about a question the server had already answered.
+
+What they *do* share is the rendering: both go through `HandDetailView`,
+which takes the hand plus an already-built set of header actions to put in
+its header row. That component knows nothing
+about editing, deleting or sharing; the owner's page passes Edit/Delete/share
+controls, the shared page passes a Download and a link home, and
+`isSharedView` only adds the "Shared hand · view only" badge. Same split as
+`PokerTable`'s between geometry and paint, applied to "what a hand looks
+like" versus "what you may do to it".
+
+**Don't reintroduce a client-side notion of "mine".** An earlier version of
+this feature decided what the page offered from a list of ids kept in
+`localStorage`, because the API had no notion of an owner to enforce
+anything (see **Who a hand belongs to** under API for what replaced it). The
+server answers ownership now, and a second answer kept in the client could
+only ever disagree with it.
+
+**Who's logged in: one provider, three states.** `context/AuthContext.js` is
+mounted once in `AppShell` and holds `status` as `'loading'`,
+`'authenticated'` or `'anonymous'`, plus the user. It is a context rather
+than a module-level value — unlike `services/tableTheme.js`, which nothing
+needs to react to — because `Nav` and `RequireAuth` must get the *same*
+answer at the *same* moment a login or logout happens elsewhere in the tree:
+logging out from the header has to re-gate the page under it in the same
+render, not on the next navigation.
+
+Three states, not a boolean, because "we haven't asked yet" and "we asked and
+there's nobody" call for opposite behaviour: the first should wait, the second
+should redirect. `RequireAuth` renders nothing while `'loading'` — not a
+spinner, since it resolves in one request on mount and a flash of "loading"
+is more distracting than a brief blank — and on `'anonymous'` navigates to
+`/login?next=<path>` so a successful login returns where the user was going.
+`Nav` draws nothing in its account corner while loading, for the same reason:
+a flash of "Log in" that then swaps to a name reads as broken.
+
+**A session can end while a page is open** — the cookie expires, or another
+tab logs out. `apiClient.js` exposes `onUnauthorized(listener)` and fires it
+on every 401, and `AuthProvider` subscribes. It belongs there because
+`apiClient` is the one module that sees every request, so it is the one place
+that can notice a session ending regardless of which page's call tripped over
+it — otherwise every page would need its own "was that a 401?" branch, and a
+page that forgot would sit there showing a raw error. It deliberately mirrors
+`router.js`'s own listener set for navigation: same shape, same reason — one
+module owns a global fact, everyone else subscribes. A 401 from a failed
+login notifies too, and that needs no special case: nobody was logged in to
+log out of, so the listener lands on state that is already `'anonymous'`.
 
 **What the replay shows of a holding.** Hero's cards are face-up throughout —
 a replay is watched from the hero's seat, and hiding what they held makes
@@ -1005,6 +1055,21 @@ classes are built from. Adding a page means composing `.hero-card` /
 `.result-card` / `.ghost-button` and friends with those variables, not
 inventing a new palette — that's what keeps two unrelated features (an odds
 calculator, a range grid) looking like one product.
+
+**None of the auth logic has automated coverage, and that is a real gap.**
+`AuthContext`'s three-state machine, `RequireAuth`'s redirect, the
+`onUnauthorized` subscription and the owner/shared split are the app's first
+genuinely stateful client logic, and `test/client/` still holds exactly one
+file (`boardSlots.test.js`, pure and DOM-free). What these were verified with
+instead was a scripted browser walkthrough — sign up, log a hand, share it,
+open the link signed out, revoke it, log out, delete the session cookie and
+confirm the app redirects rather than showing a raw error. That found a real
+bug no unit test of these modules would have (revoking a link answered 204,
+whose `null` body was being fed straight into `setHand`, blanking a hand the
+server still had), which is the argument for the walkthrough — and its
+one-off nature is the argument for the gap being worth closing. Anything here
+that starts making decisions subtler than "logged in or not" should come with
+the test infrastructure that this step did without.
 
 **Card selection: `CardSlot`.** Every individual card position on both pages
 (a player's hole card, a board street's card, the villain's hand) is its own

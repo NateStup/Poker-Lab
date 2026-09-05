@@ -230,6 +230,18 @@ body::before {
   flex-wrap: wrap;
 }
 
+/* The account corner: display name + log out once signed in, or the two
+   auth links before that. A flex row so it sits on the header's baseline
+   with the nav rather than stacking, and margin-left:auto so it stays hard
+   right when the header wraps on a narrow screen and the nav no longer
+   fills the row. */
+.nav-account {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-left: auto;
+}
+
 .site-title {
   display: flex;
   align-items: center;
