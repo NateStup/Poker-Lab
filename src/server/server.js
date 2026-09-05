@@ -61,6 +61,11 @@ async function shutdown(signal) {
 
   for (const repository of stores) {
     try {
+      // In practice this now flushes history and tournaments only:
+      // `HandLogRepository` talks to Postgres directly and has no `.store`,
+      // so the optional chain no-ops for it. That is correct rather than an
+      // oversight -- there is nothing debounced there to lose, and the pool
+      // it does hold is closed once, below, for the whole process.
       await repository?.store?.close();
     } catch (error) {
       console.error('Failed to flush a data store:', error.message);

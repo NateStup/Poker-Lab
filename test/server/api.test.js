@@ -5,25 +5,65 @@
  * directory, then driven with the global `fetch`. That exercises the real
  * middleware stack -- body parsing, routing, error handling -- without pulling
  * in a test-only HTTP client dependency.
+ *
+ * Hands are the exception to the temp directory: they carry real ownership
+ * now, so their repository is Postgres-backed and the `/api/hands` block
+ * needs a live database. It skips with a reason when there isn't one, the
+ * same way `postgresStore.test.js` does, so `npm test` still passes for
+ * someone who hasn't started Docker. History and tournaments are untouched
+ * and keep running either way.
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import pg from 'pg';
+
 import { createApp } from '../../src/server/app.js';
 import { createEmptyHand } from '../../src/shared/handLog/index.js';
 import { HandLogRepository } from '../../src/server/store/HandLogRepository.js';
 import { HistoryRepository } from '../../src/server/store/HistoryRepository.js';
 import { JsonFileStore } from '../../src/server/store/JsonFileStore.js';
+import { closePool, getPool } from '../../src/server/store/postgres/pool.js';
 import { TournamentRepository } from '../../src/server/store/TournamentRepository.js';
 
 let server;
 let baseUrl;
 let tempDir;
+/** Accounts the hand-log tests create, torn down by that block's `after`. */
+const createdUserIds = [];
+/** Row counts before the hand-log block ran, so its teardown is checked
+ *  against the database it was actually handed rather than an assumed-empty
+ *  one -- a developer's rows are not this suite's to have opinions about. */
+let handTablesBaseline;
+
+const CONNECTION_STRING =
+  process.env.DATABASE_URL || 'postgres://pokerlab:pokerlab_dev@localhost:5432/pokerlab';
+
+/**
+ * Ask the database whether it is there, without hanging the suite if it isn't.
+ * Same probe, and the same short timeout for the same reason, as
+ * `postgresStore.test.js`.
+ * @returns {Promise<string|false>} a skip reason, or false if the database answered
+ */
+async function unreachableReason() {
+  const probe = new pg.Pool({ connectionString: CONNECTION_STRING, connectionTimeoutMillis: 2000 });
+  try {
+    await probe.query('SELECT 1');
+    return false;
+  } catch (error) {
+    return `no database reachable (${error.code || error.message})`;
+  } finally {
+    await probe.end().catch(() => {});
+  }
+}
+
+const dbSkip = await unreachableReason();
 
 /**
  * @param {string} pathname
@@ -40,6 +80,58 @@ async function api(pathname, options = {}) {
   return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
+/**
+ * Row counts for the three tables the hand-log tests write to. Compared
+ * before and after that block, never asserted to be any particular number --
+ * a developer's database is not this suite's to have opinions about.
+ * @returns {Promise<{users: number, sessions: number, hands: number}>}
+ */
+async function tableCounts() {
+  const { rows } = await getPool().query(
+    `SELECT (SELECT count(*)::int FROM users) AS users,
+            (SELECT count(*)::int FROM sessions) AS sessions,
+            (SELECT count(*)::int FROM hands) AS hands`
+  );
+  return rows[0];
+}
+
+/**
+ * A `fetch` that remembers cookies, which is all "logged in" means here: the
+ * session is an httpOnly cookie the server sets and the browser carries back.
+ * A test HTTP client's `agent()` is the usual way to get this, and this
+ * project deliberately has none -- carrying one header forward is a dozen
+ * lines, which is the trade this codebase makes everywhere else too.
+ *
+ * Each call to this returns an independent jar, so two of them are two
+ * unrelated browsers, which is exactly what the cross-account tests need.
+ * @returns {(pathname: string, options?: RequestInit) => Promise<{status: number, body: any}>}
+ */
+function browser() {
+  /** @type {Map<string, string>} */
+  const jar = new Map();
+
+  return async function request(pathname, options = {}) {
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (jar.size > 0) headers.Cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+
+    const response = await fetch(`${baseUrl}${pathname}`, { ...options, headers });
+
+    for (const cookie of response.headers.getSetCookie()) {
+      const [pair] = cookie.split(';');
+      const index = pair.indexOf('=');
+      const name = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      // An empty value is `res.clearCookie` -- logging out has to actually
+      // forget the session, not carry a dead cookie forward as if it were one.
+      if (value) jar.set(name, value);
+      else jar.delete(name);
+    }
+
+    const text = await response.text();
+    return { status: response.status, body: text ? JSON.parse(text) : null };
+  };
+}
+
 before(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'poker-api-'));
 
@@ -53,10 +145,13 @@ before(async () => {
   );
   await tournamentRepository.init();
 
-  const handLogRepository = new HandLogRepository(
-    new JsonFileStore({ filePath: path.join(tempDir, 'hands.json') })
-  );
-  await handLogRepository.init();
+  // Postgres-backed, not a temp file: a hand has an owner and a share token
+  // now, and neither is something a JSON file can hold. `init()` is the call
+  // that touches the database, so it is the one thing skipped when there
+  // isn't one -- the constructor itself opens nothing, which lets `createApp`
+  // succeed and every non-hand test below run as it always has.
+  const handLogRepository = new HandLogRepository(getPool());
+  if (!dbSkip) await handLogRepository.init();
 
   const app = await createApp({ historyRepository, tournamentRepository, handLogRepository });
   server = http.createServer(app);
@@ -68,7 +163,12 @@ before(async () => {
 after(async () => {
   await new Promise(resolve => server.close(resolve));
   await fs.rm(tempDir, { recursive: true, force: true });
+  // The accounts themselves are torn down by the hand-log block's own
+  // `after`, which then proves the teardown worked -- this hook only has to
+  // outlive it, so the deletes still have a pool to run on.
+  await closePool();
 });
+
 
 describe('GET /api/health', () => {
   it('reports that the server is up', async () => {
@@ -549,14 +649,60 @@ describe('/api/tournaments', () => {
   });
 });
 
-describe('/api/hands', () => {
+// The one block in this suite that writes to the real `users`/`sessions`/
+// `hands` tables rather than a temp directory or a throwaway table: unlike
+// `PostgresStore`, none of the three repositories it exercises take a table
+// name, so there is nothing to point somewhere disposable. Isolation is by
+// ownership instead -- every test signs up its own account with a random
+// email and touches only its own rows -- and the `after` hook at the bottom
+// is what keeps that claim honest rather than merely intended.
+describe('/api/hands', { skip: dbSkip }, () => {
+  before(async () => {
+    handTablesBaseline = await tableCounts();
+  });
+
+  after(async () => {
+    if (createdUserIds.length === 0) return;
+    // Deleting the accounts takes their hands and sessions with them, by the
+    // cascades `migrations/0002_users_and_ownership.sql` declares. The check
+    // that this actually emptied the tables is the block below, not an
+    // assertion here: node:test reports a failing `after` hook as `not ok`
+    // but leaves the run's exit code at 0, so a hook is the one place an
+    // assertion cannot fail the suite.
+    await getPool().query('DELETE FROM users WHERE id = ANY($1::uuid[])', [createdUserIds]);
+  });
+
   /** @param {object} [overrides] @returns {object} a saveable hand payload */
   function handPayload(overrides = {}) {
     return { ...createEmptyHand({ seatCount: 6 }), name: 'Three-bet pot', ...overrides };
   }
 
+  /**
+   * Sign up a fresh account and return a browser already holding its session.
+   * A new email every time, so tests never collide over the unique index and
+   * no test can see a hand another one saved.
+   * @returns {Promise<{agent: (pathname: string, options?: RequestInit) => Promise<{status: number, body: any}>, user: object}>}
+   */
+  async function signUpAndLogIn() {
+    const agent = browser();
+    const { status, body } = await agent('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: `${randomUUID()}@example.test`,
+        password: 'a-fine-password',
+        displayName: 'Test Player'
+      })
+    });
+
+    assert.equal(status, 201, `signup failed: ${JSON.stringify(body)}`);
+    createdUserIds.push(body.user.id);
+    return { agent, user: body.user };
+  }
+
   it('saves a hand and returns it with derived pot maths', async () => {
-    const { status, body } = await api('/api/hands', {
+    const { agent } = await signUpAndLogIn();
+
+    const { status, body } = await agent('/api/hands', {
       method: 'POST',
       body: JSON.stringify(handPayload({
         format: { gameType: 'cash', smallBlind: 1, bigBlind: 2, ante: 0, straddleSeat: null, straddleAmount: 0 },
@@ -589,7 +735,9 @@ describe('/api/hands', () => {
   });
 
   it('rejects a hand with no name', async () => {
-    const { status, body } = await api('/api/hands', {
+    const { agent } = await signUpAndLogIn();
+
+    const { status, body } = await agent('/api/hands', {
       method: 'POST',
       body: JSON.stringify(handPayload({ name: '' }))
     });
@@ -599,10 +747,11 @@ describe('/api/hands', () => {
   });
 
   it('rejects a hand whose board reuses a hole card', async () => {
+    const { agent } = await signUpAndLogIn();
     const seats = createEmptyHand({ seatCount: 6 }).seats.map((seat, index) =>
       index === 0 ? { ...seat, cards: ['As', 'Kd'] } : seat);
 
-    const { status, body } = await api('/api/hands', {
+    const { status, body } = await agent('/api/hands', {
       method: 'POST',
       body: JSON.stringify(handPayload({
         seats,
@@ -619,19 +768,88 @@ describe('/api/hands', () => {
     assert.ok(body.error.details.some(detail => detail.includes('As')));
   });
 
-  it('reads a saved hand back by id, which is what a shared link does', async () => {
-    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload({ name: 'Shareable' })) });
+  // Renamed from 'reads a saved hand back by id, which is what a shared link
+  // does'. That is no longer what a shared link does: an id is reachable only
+  // by the hand's owner now, and sharing goes through a separate token and a
+  // separate route -- which the three tests after this one cover.
+  it('reads a saved hand back by id, as its owner', async () => {
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Shareable' }))
+    });
 
-    const { status, body } = await api(`/api/hands/${created.body.id}`);
+    const { status, body } = await agent(`/api/hands/${created.body.id}`);
     assert.equal(status, 200);
     assert.equal(body.name, 'Shareable');
     assert.ok(body.derived, 'a cold-loaded hand still ships its derived maths');
   });
 
-  it('edits a saved hand in place, keeping its id so the link still resolves', async () => {
-    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload({ name: 'Original' })) });
+  it('requires a session to read a hand by id, even with the right id', async () => {
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
 
-    const { status, body } = await api(`/api/hands/${created.body.id}`, {
+    // A brand-new jar: the real id, and no cookie at all.
+    const { status, body } = await browser()(`/api/hands/${created.body.id}`);
+    assert.equal(status, 401);
+    assert.equal(body.error.code, 'UNAUTHORIZED');
+  });
+
+  it('reports another account\'s hand as missing, not as forbidden', async () => {
+    const owner = await signUpAndLogIn();
+    const created = await owner.agent('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
+
+    const stranger = await signUpAndLogIn();
+    const { status, body } = await stranger.agent(`/api/hands/${created.body.id}`);
+
+    // 404 rather than 403, deliberately: a 403 would confirm the hand exists,
+    // which is the one thing a stranger holding an id should not learn.
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+  });
+
+  it('serves a shared hand to a caller with no session at all', async () => {
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Shared away' }))
+    });
+
+    const shared = await agent(`/api/hands/${created.body.id}/share`, { method: 'POST' });
+    assert.equal(shared.status, 200);
+    assert.ok(shared.body.shareToken, 'sharing hands back the token the owner needs to build a link');
+
+    const { status, body } = await browser()(`/api/shared-hands/${shared.body.shareToken}`);
+    assert.equal(status, 200);
+    assert.equal(body.name, 'Shared away');
+    assert.ok(body.derived, 'a shared hand is the whole hand, derived maths included');
+    assert.equal(body.shareToken, undefined, 'a viewer has no reason to see the token that let them in');
+  });
+
+  it('stops serving a shared hand once the link is revoked', async () => {
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
+    const shared = await agent(`/api/hands/${created.body.id}/share`, { method: 'POST' });
+
+    const revoked = await agent(`/api/hands/${created.body.id}/share`, { method: 'DELETE' });
+    assert.equal(revoked.status, 204);
+
+    assert.equal((await browser()(`/api/shared-hands/${shared.body.shareToken}`)).status, 404);
+    assert.equal(
+      (await agent(`/api/hands/${created.body.id}`)).status,
+      200,
+      'revoking the link leaves the hand itself alone'
+    );
+  });
+
+  it('edits a saved hand in place, keeping its id so the link still resolves', async () => {
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Original' }))
+    });
+
+    const { status, body } = await agent(`/api/hands/${created.body.id}`, {
       method: 'PATCH',
       body: JSON.stringify({ name: 'Renamed after the fact' })
     });
@@ -643,40 +861,142 @@ describe('/api/hands', () => {
   });
 
   it('rejects an edit that would make the hand invalid', async () => {
-    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
 
-    const { status } = await api(`/api/hands/${created.body.id}`, {
+    const { status } = await agent(`/api/hands/${created.body.id}`, {
       method: 'PATCH',
       body: JSON.stringify({ buttonSeat: 99 })
     });
     assert.equal(status, 400);
   });
 
-  it('lists saved hands as lightweight summaries, newest first', async () => {
-    const { status, body } = await api('/api/hands?limit=50');
+  // The old version of this test asserted only that *some* hand came back,
+  // which held because every test before it had written into one shared
+  // collection. There is no "every hand in the system" any more, and no
+  // endpoint that would answer for one, so what it asserts now is the claim
+  // that survived the change: this account's hands, and nobody else's.
+  it('lists only this account\'s hands, as lightweight summaries, newest first', async () => {
+    const { agent } = await signUpAndLogIn();
+    const first = await agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Older' }))
+    });
+    const second = await agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Newer' }))
+    });
+
+    const stranger = await signUpAndLogIn();
+    await stranger.agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Someone else\'s' }))
+    });
+
+    const { status, body } = await agent('/api/hands?limit=50');
 
     assert.equal(status, 200);
-    assert.ok(body.items.length > 0);
+    assert.equal(body.total, 2, 'the total is scoped to the owner too, not just the page');
+    assert.deepEqual(body.items.map(item => item.id), [second.body.id, first.body.id]);
+
     const summary = body.items[0];
-    assert.ok(summary.name);
+    assert.equal(summary.name, 'Newer');
     assert.equal(summary.seatCount, 6);
     assert.ok('totalPot' in summary);
     assert.ok('heroCards' in summary);
     assert.equal(summary.seats, undefined, 'the full roster is not shipped to a list view');
   });
 
-  it('deletes a hand', async () => {
-    const created = await api('/api/hands', { method: 'POST', body: JSON.stringify(handPayload({ name: 'Deletable' })) });
-
-    const { status } = await api(`/api/hands/${created.body.id}`, { method: 'DELETE' });
-    assert.equal(status, 204);
-    assert.equal((await api(`/api/hands/${created.body.id}`)).status, 404);
+  it('requires a session to list hands', async () => {
+    const { status, body } = await browser()('/api/hands');
+    assert.equal(status, 401);
+    assert.equal(body.error.code, 'UNAUTHORIZED');
   });
 
+  it('deletes a hand', async () => {
+    const { agent } = await signUpAndLogIn();
+    const created = await agent('/api/hands', {
+      method: 'POST',
+      body: JSON.stringify(handPayload({ name: 'Deletable' }))
+    });
+
+    const { status } = await agent(`/api/hands/${created.body.id}`, { method: 'DELETE' });
+    assert.equal(status, 204);
+    assert.equal((await agent(`/api/hands/${created.body.id}`)).status, 404);
+  });
+
+  it('refuses to delete another account\'s hand, and leaves it standing', async () => {
+    const owner = await signUpAndLogIn();
+    const created = await owner.agent('/api/hands', { method: 'POST', body: JSON.stringify(handPayload()) });
+
+    const stranger = await signUpAndLogIn();
+    assert.equal((await stranger.agent(`/api/hands/${created.body.id}`, { method: 'DELETE' })).status, 404);
+    assert.equal((await owner.agent(`/api/hands/${created.body.id}`)).status, 200, 'still there for its owner');
+  });
+
+  // A well-formed id that was simply never issued. It has to be a real UUID:
+  // `id` is a uuid column now, so a string that isn't one fails to parse in
+  // Postgres rather than matching nothing -- a different failure than the one
+  // this test is about.
   it('404s for an unknown hand', async () => {
-    const { status, body } = await api('/api/hands/not-a-real-id');
+    const { agent } = await signUpAndLogIn();
+
+    const { status, body } = await agent(`/api/hands/${randomUUID()}`);
     assert.equal(status, 404);
     assert.equal(body.error.code, 'NOT_FOUND');
+  });
+
+  // `not-a-real-id` is kept as a literal on purpose: it is the exact string
+  // that surfaced this, and it fails differently from the well-formed id in
+  // the test above. `id` is a uuid column, so Postgres cannot parse this one
+  // at all (22P02) rather than parsing it and matching nothing. Both are "no
+  // such hand" to a caller. One test per verb, because each runs its own
+  // query and so could regress on its own.
+  it('404s for a malformed hand id on GET', async () => {
+    const { agent } = await signUpAndLogIn();
+
+    const { status, body } = await agent('/api/hands/not-a-real-id');
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+  });
+
+  it('404s for a malformed hand id on PATCH', async () => {
+    const { agent } = await signUpAndLogIn();
+
+    const { status, body } = await agent('/api/hands/not-a-real-id', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' })
+    });
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+  });
+
+  it('404s for a malformed hand id on DELETE', async () => {
+    const { agent } = await signUpAndLogIn();
+
+    const { status, body } = await agent('/api/hands/not-a-real-id', { method: 'DELETE' });
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+  });
+
+  it('404s for a share token that was never issued', async () => {
+    const { status, body } = await browser()('/api/shared-hands/not-a-real-token');
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+  });
+});
+
+// Deliberately a separate block rather than an assertion in the hook above:
+// a following top-level suite runs after the previous one's `after` has
+// completed, so the deletes have happened by the time this reads the counts,
+// and a failure here is a failed *test* -- which is what actually fails the
+// run. It is the evidence for the isolation claim above `/api/hands`: if a
+// future test signs up an account it never registers for teardown, or a
+// cascade stops cascading, this goes red instead of quietly leaving rows in
+// whichever database the suite was pointed at.
+describe('/api/hands cleanup', { skip: dbSkip }, () => {
+  it('leaves no rows behind in the real tables', async () => {
+    assert.deepEqual(await tableCounts(), handTablesBaseline);
   });
 });
 

@@ -15,12 +15,20 @@ import morgan from 'morgan';
 
 import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { createRequireAuth } from './middleware/requireAuth.js';
 import { createApiRouter } from './routes/index.js';
+import { AuthService } from './services/AuthService.js';
 import { EquityService } from './services/EquityService.js';
 import { HandLogService } from './services/HandLogService.js';
 import { RangeService } from './services/RangeService.js';
 import { TournamentService } from './services/TournamentService.js';
-import { createHandLogRepository, createHistoryRepository, createTournamentRepository } from './store/index.js';
+import {
+  createHandLogRepository,
+  createHistoryRepository,
+  createSessionsRepository,
+  createTournamentRepository,
+  createUsersRepository
+} from './store/index.js';
 
 /**
  * Build a fully wired Express app.
@@ -45,6 +53,14 @@ export async function createApp({ historyRepository, tournamentRepository, handL
   const tournamentService = new TournamentService({ tournamentRepository: tournamentRepo });
   const handLogService = new HandLogService({ handLogRepository: handLogRepo });
 
+  // Accounts are Postgres-only and need no async setup, so these are built
+  // here rather than injected: there is no temp-directory equivalent for a
+  // test to substitute, the way there is for the three repositories above.
+  const usersRepository = createUsersRepository();
+  const sessionsRepository = createSessionsRepository();
+  const authService = new AuthService({ usersRepository, sessionsRepository });
+  const requireAuth = createRequireAuth({ sessionsRepository });
+
   const app = express();
 
   app.set('port', config.port);
@@ -54,7 +70,7 @@ export async function createApp({ historyRepository, tournamentRepository, handL
   app.use(morgan(config.logging.format));
   app.use(express.json({ limit: '256kb' }));
   app.use(express.urlencoded({ extended: false }));
-  app.use(cookieParser());
+  app.use(cookieParser(config.auth.sessionSecret));
 
   // The browser imports the poker domain straight from source. Serving
   // `src/shared` is what lets the client and server share one implementation
@@ -73,6 +89,9 @@ export async function createApp({ historyRepository, tournamentRepository, handL
     rangeService,
     tournamentService,
     handLogService,
+    authService,
+    sessionsRepository,
+    requireAuth,
     historyRepository: repository
   }));
 
