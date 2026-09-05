@@ -21,11 +21,31 @@ npm start
 
 ```bash
 npm run dev    # auto-restart on change
-npm test       # 391 tests, no test framework dependency
+npm test       # 397 tests, no test framework dependency
 ```
 
 Requires **Node 20.11 or newer**. No build step — the frontend is served as
 native ES modules.
+
+### Running with Postgres
+
+The store defaults to Postgres. Bring the database up, apply the schema, then
+start the server as usual:
+
+```bash
+docker compose up -d postgres   # or: npm run db:up
+cp .env.example .env            # credentials already match docker-compose.yml
+npm run db:migrate              # creates history, tournaments, hands
+npm start                       # or npm run dev
+```
+
+`npm run db:migrate` is safe to re-run — applied migrations are recorded by
+filename, so a second run reports nothing to apply. It is deliberately not run
+on boot: a schema change is a deploy step, not a side effect of starting the
+app.
+
+No database to hand? `STORE_DRIVER=json npm start` runs against the JSON files
+in `data/` exactly as before.
 
 ## What it does
 
@@ -138,7 +158,7 @@ src/
     config.js              All environment resolution, in one place
     routes/                Thin HTTP handlers built by dependency-taking factories
     services/              Orchestration between domain and store
-    store/                 DataStore → JsonFileStore → {History,Tournament,HandLog}Repository
+    store/                 DataStore → {JsonFileStore, PostgresStore} → {History,Tournament,HandLog}Repository
     middleware/            Error handling, async wrapper
     errors/                ApiError
 public/                  Buildless frontend
@@ -154,7 +174,8 @@ public/                  Buildless frontend
 test/
   shared/                Domain tests (shared/tournament/ mirrors src/shared/tournament/)
   server/                Store and end-to-end API tests
-data/                    JSON store (contents gitignored)
+data/                    JSON store (contents gitignored; json driver only)
+migrations/              Hand-written .sql schema changes (npm run db:migrate)
 ```
 
 ### One domain, two runtimes
@@ -190,10 +211,21 @@ against a temp directory.
 
 ### Data store
 
-`DataStore` defines the contract; `JsonFileStore` implements it over JSON files;
-`HistoryRepository`, `TournamentRepository` and `HandLogRepository` each expose a
-domain-level API on top of the same store class. Services depend on the repository, so moving
-to SQLite or Postgres means one new class and one changed line.
+`DataStore` defines the contract; `JsonFileStore` implements it over JSON files
+and `PostgresStore` over one table per collection; `HistoryRepository`,
+`TournamentRepository` and `HandLogRepository` each expose a domain-level API on
+top of whichever of the two they were handed. Services depend on the repository,
+never on a concrete store, which is what made adding Postgres a new class and a
+branch in one factory rather than a change anywhere upstream — `STORE_DRIVER`
+picks between them at boot.
+
+Each Postgres table is `id`, `data JSONB`, `created_at`, `updated_at`: a
+faithful translation of the JSON record shape rather than a relational model,
+with `hands` the one earmarked for real columns once accounts exist. The one
+interface change the swap needed was `list({where})`, which went from a
+JavaScript predicate to a plain equality object — a closure cannot become a
+`WHERE` clause. Schema changes are hand-written `.sql` files in `migrations/`,
+applied by `npm run db:migrate` and tracked in a `schema_migrations` table.
 
 The file store is small but not naive — it guards against torn writes (temp file
 plus atomic rename), interleaved writes (a serialised flush chain), concurrent
@@ -400,7 +432,10 @@ Errors are consistently shaped, with field-level detail where it exists:
 npm test
 ```
 
-391 tests via Node's built-in runner — no Jest, Mocha, or Chai.
+397 tests via Node's built-in runner — no Jest, Mocha, or Chai. The
+`PostgresStore` suite makes the same assertions against the other store
+implementation, and skips itself with a reason when no database is reachable,
+so the suite still passes without Docker running.
 
 The domain tests deliberately favour assertions that are **provable by hand**
 over published percentages: a player holding the nut straight flush on a
@@ -424,7 +459,9 @@ API tests boot the real Express app on an ephemeral port and drive it with
 | `PORT` | `3000` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `NODE_ENV` | `development` | Controls error verbosity and log format |
-| `DATA_DIR` | `./data` | Where the JSON store lives |
+| `DATA_DIR` | `./data` | Where the JSON store lives (`json` driver only) |
+| `STORE_DRIVER` | `postgres` | `postgres` or `json` |
+| `DATABASE_URL` | `postgres://pokerlab:pokerlab_dev@localhost:5432/pokerlab` | Connection string |
 | `MAX_HISTORY_RECORDS` | `500` | Retention cap; oldest evicted first |
 | `LOG_FORMAT` | `dev` / `combined` | morgan format |
 
@@ -432,11 +469,12 @@ API tests boot the real Express app on an ephemeral port and drive it with
 
 **Backend** — Node 20+, Express 4, ES modules throughout.
 **Frontend** — React 18 (UMD via CDN), native ES modules, no build step.
-**Data** — JSON file store behind a swappable interface.
+**Data** — Postgres (JSONB) or a JSON file store, behind one swappable interface.
 **Testing** — `node:test` and `node:assert`.
 
-Dependencies are kept deliberately minimal: three runtime packages
-(`express`, `morgan`, `cookie-parser`) and zero dev dependencies. The frontend
+Dependencies are kept deliberately minimal: four runtime packages
+(`express`, `morgan`, `cookie-parser`, `pg`) and zero dev dependencies — no
+ORM and no query builder; the store writes its own SQL. The frontend
 uses `React.createElement` rather than JSX so it runs in the browser untouched;
 see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
 
@@ -455,7 +493,7 @@ see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
 - [ ] Tournament seating/table balancing
 - [ ] CI pipeline (GitHub Actions) with test runs and build artifacts
 - [ ] Hand-log extras — equity at every decision, replayer autoplay, hand-history import
-- [ ] Database-backed store
+- [x] Database-backed store — Postgres behind the same `DataStore` interface
 
 ## Notes
 

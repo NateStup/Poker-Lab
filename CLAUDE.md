@@ -25,10 +25,32 @@ npm run dev        # same, with --watch auto-restart
 npm test           # run the full suite (node:test, no test framework dependency)
 npm run test:watch # re-run on change
 npm run test:coverage
+npm run db:up      # start the Postgres container (docker compose)
+npm run db:migrate # apply every migration that hasn't run yet
 ```
 
 Environment: `PORT`, `HOST`, `NODE_ENV`, `DATA_DIR`, `MAX_HISTORY_RECORDS`,
-`LOG_FORMAT`. All resolved in one place — [src/server/config.js](src/server/config.js).
+`LOG_FORMAT`, `DATABASE_URL`, `STORE_DRIVER`. All resolved in one place —
+[src/server/config.js](src/server/config.js), which is also the only module
+that reads `process.env` at all.
+
+A `.env` at the repo root is read on startup (copy `.env.example`), by
+[src/server/loadEnv.js](src/server/loadEnv.js) — a dozen lines rather than
+`dotenv`, and not Node's `--env-file`, whose don't-error-if-absent variant
+needs Node 22.9 while this project's floor is 20.11. Two properties of it are
+load-bearing:
+
+- **A real environment variable always wins.** `.env` fills in what
+  `process.env` doesn't already have, so `STORE_DRIVER=json npm start` and a
+  hosting platform's own configuration both still beat the file, and a stray
+  `.env` in a deployment can't shadow the real thing.
+- **A missing `.env` is the normal case, not an error.** CI and production
+  have none; the loader returns silently.
+
+It is called from `config.js` **before** the `config` literal, because every
+value in that literal reads `process.env` while the module is evaluated. That
+one call is the whole wiring — there is no import order for anything else to
+get right.
 
 Requires Node >= 20.11.
 
@@ -67,11 +89,13 @@ src/
   shared/tournament/  Pure tournament domain logic (blind clock, stats, payouts). Same rules.
   shared/handLog/     Pure hand-log domain logic (positions, forced bets, pot maths, replay, analysis). Same rules.
   server/             Express app: config, routes, services, store, middleware.
+  server/store/postgres/  The Postgres driver: the shared pool and PostgresStore.
 public/               Static frontend. Buildless native ES modules + CDN React.
 test/shared/          Domain tests (test/shared/tournament/ mirrors src/shared/tournament/).
 test/server/          Store and end-to-end API tests.
 test/client/          Tests for pure frontend modules (no DOM, no React).
-data/                 JSON data store (contents gitignored).
+data/                 JSON data store (contents gitignored); used by the json driver.
+migrations/           Hand-written .sql schema changes, applied by npm run db:migrate.
 ```
 
 Request flow: `route → service → domain` on the way in, `→ store` on the way out.
@@ -429,11 +453,14 @@ hand, and it is where the odds calculator's engine meets the hand logger:
 
 ## Data store
 
-`DataStore` (abstract) → `JsonFileStore` (JSON files) → a repository per record
-type (`HistoryRepository`, `TournamentRepository`, `HandLogRepository`), each
-exposing a domain-level API over the same store class. Services depend on the
-repository, never on a concrete store, so swapping in SQLite means one new class
-and one line in [src/server/store/index.js](src/server/store/index.js).
+`DataStore` (abstract) → **two** implementations — `JsonFileStore` (a JSON file
+per collection) and `PostgresStore` (a table per collection) — → a repository
+per record type (`HistoryRepository`, `TournamentRepository`,
+`HandLogRepository`), each exposing a domain-level API over whichever store it
+was handed. Services depend on the repository, never on a concrete store, which
+is what made the Postgres swap a new class plus a branch in
+[src/server/store/index.js](src/server/store/index.js) rather than a change
+anywhere upstream.
 
 `JsonFileStore` guards three specific failure modes; don't regress them:
 
@@ -454,7 +481,57 @@ uses it for `PATCH /api/hands/:id`, where the edit is merged over the stored
 record and then validated in full. The read, `updater`
 call, and write into the in-memory array happen synchronously in one tick
 (only the disk `flush()` after is async), so two `update()` calls on the same
-id can't interleave and silently lose one's change.
+id can't interleave and silently lose one's change. `PostgresStore` has to buy
+that same guarantee explicitly, and does: `SELECT ... FOR UPDATE` inside a
+transaction, so a concurrent `update()` on the same id waits rather than racing.
+
+### Postgres
+
+`config.db.driver` picks the implementation, and it now defaults to
+`'postgres'`. `STORE_DRIVER=json` falls back to the files without touching
+code — that path is still wired and still works, so treat it as a supported
+configuration rather than dead weight in the diff. `dataDir` on the three
+factories is meaningful only under the json driver; Postgres has no directory
+to point at, so it is ignored there rather than throwing.
+
+`PostgresStore` is **one instance per table**, exactly mirroring one
+`JsonFileStore` per file. Every table is `id`, `data JSONB`, `created_at`,
+`updated_at` — a faithful translation of the JSON record shape, **not yet a
+relational model**. `id` and the timestamps are real columns because "newest
+first" should be an index rather than a reversed array; everything else stays
+in `data` because these collections have no fixed shape worth modelling yet.
+`hands` is the one expected to change: a `users` table, a foreign key and
+share tokens once accounts exist, at which point it stops being a JSONB blob.
+`history` and `tournaments` have no per-user concept at all, so the blob is an
+honest fit for them rather than a placeholder.
+
+**`where` is an equality object, not a predicate.** This was the one interface
+change the swap needed: `list({where: record => record.type === 'equity'})`
+cannot become a SQL `WHERE` clause, so `DataStore` was narrowed to
+`{type: 'equity'}` — the shape an in-memory filter and a real query can both
+express. `JsonFileStore` matches it with `matchesAll`; `PostgresStore`
+compiles it to `data ->> 'field' = $n`. Note the consequence of that `->>`:
+a filter only sees fields inside `data`, so filtering on `id` or `createdAt`
+— which are columns, not JSON keys — would match nothing. Nothing does today,
+and the day something needs to, the fix belongs in `buildWhereClause`.
+
+Field and table names are the one place in the store layer that builds SQL by
+**concatenation instead of parameters**, because `pg`'s `$1` placeholders bind
+values and there is no placeholder for the name of a column. Everything
+interpolated is checked against `SAFE_IDENTIFIER` first — the table name at
+construction, each filter field at query time. Don't add a second interpolated
+value without putting it through that same check.
+
+**Migrations are hand-written `.sql` files in `migrations/`**, applied by
+`npm run db:migrate` and tracked by filename in a `schema_migrations` table, so
+running it twice is a no-op. Deliberately **not** run on boot: a schema change
+is a deploy step, and running it from `npm run dev` would silently retry a
+broken migration on every file save instead of failing once, visibly.
+
+One behaviour that does **not** survive the swap: `maxHistoryRecords` is a
+`JsonFileStore` option, so history is capped under the json driver and
+unbounded under Postgres. That is a retention policy to write as a DELETE, not
+something to reimplement per-insert.
 
 ## Testing
 
@@ -468,8 +545,15 @@ id can't interleave and silently lose one's change.
   identical boards split 50/50) over published percentages. Where a statistical
   assertion is unavoidable, use a fixed seed and a wide band.
 - Store and API tests must use a temp directory (`fs.mkdtemp`) — never touch
-  `data/`.
+  `data/`. The Postgres equivalent is a throwaway table created in `before`
+  and dropped in `after` — never the real `history`/`tournaments`/`hands`.
 - API tests boot the real app on an ephemeral port and drive it with `fetch`.
+- `postgresStore.test.js` asserts the *same* things `store.test.js` does, on
+  the other implementation — that is the only evidence the two stores actually
+  agree. It probes the connection once at module load and **skips** the whole
+  file with a reason when there is no database, because `npm test` has to keep
+  passing for someone who hasn't started Docker. A skipped file proves nothing,
+  so run it with the container up before trusting a change to `PostgresStore`.
 
 ## Frontend
 
@@ -748,11 +832,32 @@ its own. The timeline is hidden in fullscreen so the felt keeps the screen:
 nothing becomes unreachable (the scrubber, the arrow keys and the jump
 buttons still step the same frames), but jumping straight to one beat by name
 is lost, which is a real cost and the reason it is a judgement call.
-The table is sized by height only in fullscreen. Width follows from aspect-ratio, and --table-aspect carries the same TABLE_SHAPE number the inline aspectRatio does, so the ratio is written down once. Constraining width at both ends instead, with flex assigning a definite height, lets the box stop being the ratio toCss assumes when it places seats, and the seats go off the rail by construction. One constrained dimension is what makes that impossible rather than unlikely.
 
-The clamps read 100cqi, not 100vw. The container is the viewport minus its own scrollbar, and on a screen short enough to scroll vertically a vw-based floor is too wide by exactly the scrollbar's width: a horizontal scrollbar caused by a vertical one. Note also that a percentage in max-height resolves against the container's height, which is the wrong axis for a width cap and computed to about 369px at 1280x720 before it was replaced. It only failed to bite because min-height wins that conflict.
+**The table is sized by height only.** Width follows from `aspect-ratio`, and
+`--table-aspect` carries the same `TABLE_SHAPE` number the inline
+`aspectRatio` does, so the ratio is written down once. Constraining width at
+both ends instead, with flex assigning a definite height, lets the box stop
+being the ratio `toCss` assumes when it places seats, and the seats go off the
+rail by construction. One constrained dimension is what makes that impossible
+rather than unlikely.
 
-container-type: inline-size implies containment, which this file has been bitten by once before (see the isolation: isolate note on body). It was checked rather than assumed: screenshots after a tall-to-short navigation are byte-identical to a fresh load of the same page. Containment applies only while :fullscreen. Two measurement traps found along the way: headless Chrome reports a 0px scrollbar because of overlay scrollbars, so the scrollbar case must be run headed, and getComputedStyle().contain reports none even when container-type is set, so it is not a usable signal for whether containment is active.
+**The clamps read `100cqi`, not `100vw`.** The container is the viewport minus
+its own scrollbar, and on a screen short enough to scroll vertically a
+`vw`-based floor is too wide by exactly the scrollbar's width: a horizontal
+scrollbar caused by a vertical one. Note also that a percentage in
+`max-height` resolves against the container's *height*, which is the wrong
+axis for a width cap. It computed to about 369px at 1280x720 before it was
+replaced, and only failed to bite because `min-height` wins that conflict.
+
+**Containment was checked, not assumed.** `container-type: inline-size`
+implies containment, and this file has been bitten by that once before (see
+the `isolation: isolate` note on `body`). Screenshots taken after a
+tall-to-short navigation are byte-identical to a fresh load of the same page,
+and the containment applies only while `:fullscreen`. Two measurement traps
+turned up on the way: headless Chrome reports a 0px scrollbar because of
+overlay scrollbars, so that case has to be run headed, and
+`getComputedStyle().contain` reports `none` even when `container-type` is set,
+so it is not a usable signal for whether containment is active.
 
 **Motion is always confirmation, never information.** Everything animated
 here restates something the frame already shows, so

@@ -27,7 +27,10 @@ export class DataStore {
 
   /**
    * Read a page of records, newest first.
-   * @param {{limit?: number, offset?: number, where?: (record: object) => boolean}} [_query]
+   * @param {{limit?: number, offset?: number, where?: Record<string, unknown>}} [_query]
+   *   `where` is a plain object of field-equals-value pairs, not a predicate --
+   *   a closure can't become a SQL WHERE clause, so every implementation has to
+   *   agree on a shape both an in-memory filter and a real query can express.
    * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
    */
   async list(_query) {

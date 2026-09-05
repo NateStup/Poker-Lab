@@ -13,7 +13,9 @@
     "dev": "node --watch src/server/server.js",
     "test": "node --test",
     "test:watch": "node --test --watch",
-    "test:coverage": "node --test --experimental-test-coverage"
+    "test:coverage": "node --test --experimental-test-coverage",
+    "db:migrate": "node src/server/store/migrate.js",
+    "db:up": "docker compose up -d postgres"
   },
   "keywords": [
     "poker",
@@ -25,6 +27,7 @@
   "dependencies": {
     "cookie-parser": "~1.4.6",
     "express": "~4.19.2",
-    "morgan": "~1.10.0"
+    "morgan": "~1.10.0",
+    "pg": "~8.12.0"
   }
 }
