@@ -8,13 +8,20 @@ Guidance for working in this repository.
 the code is meant to be *read*: clarity, structure, and comments that explain
 reasoning matter as much as behaviour.
 
-Shipped: a Texas Hold'em odds calculator with persistent history and exact
-outs, a range explorer (range-vs-hand and range-vs-range equity, range
-notation import/export, a Chen-formula "top X%" slider), a tournament
+Shipped: accounts (sign up, log in, log out; a session is a signed
+`httpOnly` cookie), a Texas Hold'em odds calculator with persistent history
+and exact outs, a range explorer (range-vs-hand and range-vs-range equity,
+range notation import/export, a Chen-formula "top X%" slider), a tournament
 manager (registration, buy-ins/rebuys/add-ons, a blind clock, and payouts),
-and a hand logger (recreate a hand on a table diagram, log the betting and
-your thinking street by street, then share a link that replays it action by
-action).
+and a hand logger (recreate a hand on a table diagram, then log the betting
+and your thinking street by street).
+
+Accounts are what the hand logger is built on: a saved hand belongs to the
+account that logged it and is reachable by nobody else. Sharing one is a
+capability, not a URL trick — the owner issues a token they can revoke, and
+anyone holding the link can replay the hand action by action with no account
+and no way to edit it. The calculator, range explorer and tournament manager
+need no login; they have no per-user concept at all.
 Next up: a poker simulator (see [Roadmap](#roadmap)).
 
 ## Commands
@@ -30,9 +37,18 @@ npm run db:migrate # apply every migration that hasn't run yet
 ```
 
 Environment: `PORT`, `HOST`, `NODE_ENV`, `DATA_DIR`, `MAX_HISTORY_RECORDS`,
-`LOG_FORMAT`, `DATABASE_URL`, `STORE_DRIVER`. All resolved in one place —
-[src/server/config.js](src/server/config.js), which is also the only module
-that reads `process.env` at all.
+`WRITE_DEBOUNCE_MS`, `LOG_FORMAT`, `DATABASE_URL`, `STORE_DRIVER`,
+`SESSION_TTL_MS`, and `SESSION_SECRET`. That last one is the only variable
+the server **refuses to start in production without**, rather than signing
+session cookies with the publicly-known development default.
+
+All of them are resolved in one place —
+[src/server/config.js](src/server/config.js), the only module that reads
+`process.env` *for use elsewhere in the app*. `loadEnv.js` also touches it,
+but in the other direction: it writes values into `process.env` once, before
+the `config` literal is evaluated. That is populating the environment, not
+consuming it, which is why "one reader" still holds as a rule about where
+configuration enters the app.
 
 A `.env` at the repo root is read on startup (copy `.env.example`), by
 [src/server/loadEnv.js](src/server/loadEnv.js) — a dozen lines rather than
@@ -89,16 +105,28 @@ src/
   shared/tournament/  Pure tournament domain logic (blind clock, stats, payouts). Same rules.
   shared/handLog/     Pure hand-log domain logic (positions, forced bets, pot maths, replay, analysis). Same rules.
   server/             Express app: config, routes, services, store, middleware.
+  server/auth/        Password hashing. Server-only by nature, so deliberately not under shared/.
+  server/errors/      ApiError: the failures the API deliberately shows a client.
   server/store/postgres/  The Postgres driver: the shared pool and PostgresStore.
 public/               Static frontend. Buildless native ES modules + CDN React.
-test/shared/          Domain tests (test/shared/tournament/ mirrors src/shared/tournament/).
+test/shared/          Domain tests (test/shared/tournament/ and test/shared/handLog/ mirror their src/ counterparts).
 test/server/          Store and end-to-end API tests.
 test/client/          Tests for pure frontend modules (no DOM, no React).
-data/                 JSON data store (contents gitignored); used by the json driver.
+data/                 JSON files for the json driver (contents gitignored) — history and tournaments only.
 migrations/           Hand-written .sql schema changes, applied by npm run db:migrate.
 ```
 
-Request flow: `route → service → domain` on the way in, `→ store` on the way out.
+A `data/hands.json` may still exist on a machine that ran the json driver
+before the hand logger became Postgres-only. Nothing reads or writes it now —
+`createHandLogRepository` throws under `STORE_DRIVER=json` rather than
+falling back to it. It is gitignored local dev data; leave it alone.
+
+Request flow: `route → service → domain` on the way in, `→ store` on the way
+out. Auth is the one exception, and it is a principled one: `route →
+AuthService → UsersRepository`/`SessionsRepository`, with no domain layer in
+the middle. There is nothing for a `src/shared/auth/` to hold — password
+hashing needs `node:crypto` and could never run in the browser, which is
+exactly the purity rule `src/shared/` exists to enforce.
 
 ### The one rule that shapes everything: shared domain code
 
@@ -132,14 +160,17 @@ Consequences to respect:
 
 | Layer | Location | Rule |
 |---|---|---|
-| Domain | `src/shared/poker/`, `src/shared/tournament/` | Pure functions and classes. No I/O. Fully unit-testable. |
+| Domain | `src/shared/poker/`, `src/shared/tournament/`, `src/shared/handLog/` | Pure functions and classes. No I/O. Fully unit-testable. |
 | Service | `src/server/services/` | Orchestrates domain + store. Takes dependencies via constructor injection. |
 | Route | `src/server/routes/` | Thin: parse, delegate, respond. Built by a `createXRouter({deps})` factory so tests can inject stubs. |
-| Store | `src/server/store/` | Persistence behind the `DataStore` interface. |
+| Store | `src/server/store/` | Persistence, in two shapes. `history` and `tournaments` go through the `DataStore` interface; `hands`, `users` and `sessions` have dedicated repositories that write SQL against the pool directly. See [Data store](#data-store) for why the split exists. |
 
-`createApp({historyRepository, tournamentRepository})` accepts injected
-repositories — that is how the API tests run against temp directories instead
-of real data.
+`createApp({historyRepository, tournamentRepository, handLogRepository})`
+accepts injected repositories. For history and tournaments that is how the
+API tests run against temp directories instead of real data. It does **not**
+buy the hand-log tests the same thing: there is no temp-directory equivalent
+of a hand any more, so they inject a repository built on the real pool and
+isolate by ownership instead — see [Testing](#testing).
 
 ## Conventions
 
@@ -504,37 +535,57 @@ of an account, ever.
 History records store the request, the result, *and the seed*. A stored result is
 only meaningful if the run can be replayed.
 
-`DataStore#update(id, updater)` is a read-modify-write: `HistoryRepository`
-never needed it (a calculation result is immutable once stored), but
-`TournamentRepository` uses it for everything after creation — a tournament's
-roster, clock, and blind level all change constantly — and `HandLogRepository`
-uses it for `PATCH /api/hands/:id`, where the edit is merged over the stored
-record and then validated in full. The read, `updater`
-call, and write into the in-memory array happen synchronously in one tick
-(only the disk `flush()` after is async), so two `update()` calls on the same
-id can't interleave and silently lose one's change. `PostgresStore` has to buy
-that same guarantee explicitly, and does: `SELECT ... FOR UPDATE` inside a
+`DataStore#update(id, updater)` is a read-modify-write, and
+`TournamentRepository` is now its only caller — a tournament's roster, clock,
+and blind level all change constantly. `HistoryRepository` never needed it (a
+calculation result is immutable once stored). The read, `updater` call, and
+write into the in-memory array happen synchronously in one tick (only the disk
+`flush()` after is async), so two `update()` calls on the same id can't
+interleave and silently lose one's change. `PostgresStore` has to buy that
+same guarantee explicitly, and does: `SELECT ... FOR UPDATE` inside a
 transaction, so a concurrent `update()` on the same id waits rather than racing.
+
+**`PATCH /api/hands/:id` does not go through any of that**, and none of the
+reasoning above applies to it. The edit is still merged over the stored record
+and then validated in full — that part is real, and it happens in
+`HandLogService.update`, which spreads `{...existing, ...payload}` through
+`validateHandLogRequest` before writing. The write itself is
+`HandLogRepository.update`'s own single statement, `UPDATE hands SET data =
+$3, updated_at = $4 WHERE id = $1 AND user_id = $2 RETURNING ...`. One
+statement scoped to the owner needs no read-then-write window to protect,
+because it doesn't have one.
 
 ### Postgres
 
 `config.db.driver` picks the implementation, and it now defaults to
 `'postgres'`. `STORE_DRIVER=json` falls back to the files without touching
 code — that path is still wired and still works, so treat it as a supported
-configuration rather than dead weight in the diff. `dataDir` on the three
-factories is meaningful only under the json driver; Postgres has no directory
-to point at, so it is ignored there rather than throwing.
+configuration rather than dead weight in the diff. `dataDir` survives on exactly two of the five factories in
+[src/server/store/index.js](src/server/store/index.js) —
+`createHistoryRepository` and `createTournamentRepository` — where it is
+meaningful only under the json driver; Postgres has no directory to point at,
+so it is ignored there rather than treated as an error.
+`createHandLogRepository` dropped it along with its driver branch (see the
+bullet above), and `createUsersRepository`/`createSessionsRepository` never
+had one.
 
 `PostgresStore` is **one instance per table**, exactly mirroring one
-`JsonFileStore` per file. Every table is `id`, `data JSONB`, `created_at`,
-`updated_at` — a faithful translation of the JSON record shape, **not yet a
-relational model**. `id` and the timestamps are real columns because "newest
-first" should be an index rather than a reversed array; everything else stays
-in `data` because these collections have no fixed shape worth modelling yet.
-`hands` is the one expected to change: a `users` table, a foreign key and
-share tokens once accounts exist, at which point it stops being a JSONB blob.
-`history` and `tournaments` have no per-user concept at all, so the blob is an
-honest fit for them rather than a placeholder.
+`JsonFileStore` per file — and it now backs exactly two of them, `history`
+and `tournaments`. Both of those tables are `id`, `data JSONB`,
+`created_at`, `updated_at`: a faithful translation of the JSON record shape
+rather than a relational model. `id` and the timestamps are real columns
+because "newest first" should be an index rather than a reversed array;
+everything else stays in `data` because neither collection has a per-user
+concept or a fixed shape worth modelling. For those two the blob is an honest
+fit, not a placeholder.
+
+`hands` **was** the third, and is not any more. It grew a `user_id` foreign
+key and a `share_token` in `migrations/0002_users_and_ownership.sql` and
+moved to a repository of its own; `users` and `sessions` arrived in the same
+migration and were never JSONB envelopes at all. Those three shapes are
+documented where the behaviour that needs them is — the `HandLogRepository`
+note at the top of this section, and
+[Who a hand belongs to](#who-a-hand-belongs-to) — rather than repeated here.
 
 **`where` is an equality object, not a predicate.** This was the one interface
 change the swap needed: `list({where: record => record.type === 'equity'})`
@@ -593,9 +644,12 @@ something to reimplement per-insert.
   failing hook as `not ok` but leaves `# fail` at 0 and the exit code at 0, so
   an assertion in a hook cannot fail the run. Verified by leaking one account
   deliberately and watching it go red.
-- Both hand-log files skip with a reason when no database answers, same probe
-  as `postgresStore.test.js`, so `npm test` still passes with Docker down —
-  381 of the 428 tests run in that case.
+- Both files holding hand-log tests skip with a reason when no database
+  answers, same probe as `postgresStore.test.js`, so `npm test` still passes
+  with Docker down. That is five suites going to `# SKIP`, not two —
+  `/api/hands` and `/api/hands cleanup` from `api.test.js`,
+  `HandLogRepository`, and `PostgresStore` plus `PostgresStore durability` —
+  and 381 of the 429 tests still run.
 - API tests boot the real app on an ephemeral port and drive it with `fetch`.
 - `postgresStore.test.js` asserts the *same* things `store.test.js` does, on
   the other implementation — that is the only evidence the two stores actually
@@ -618,7 +672,8 @@ compatible.
 
 Client structure: `main.js` (bootstrap) → `AppShell.js` (page shell: nav +
 route switch) → `pages/` (one component per route, owns that page's state) →
-`components/` (presentational) + `hooks/` (stateful logic) + `context/`
+`components/` (presentational) + `hooks/` (stateful logic — currently just
+`useHistory.js`) + `context/`
 (state more than one branch of the tree has to agree on — currently just
 auth) + `services/` (API access). All fetch calls go through `services/apiClient.js`, which
 normalises the server's `{error: {message, details}}` shape into thrown
@@ -640,8 +695,15 @@ router change at all: `useRoute()` already returns the raw pathname, so
 and it needed none either — both go through one `segmentAfter(path, prefix)`
 helper rather than each growing its own slightly different "strip the prefix,
 decode, treat empty as none" rule. The login redirect's `?next=` is what
-added `useSearchParam`, kept in `router.js` so `window.location` still has
-exactly one reader.
+added `useSearchParam`, kept in `router.js` so routing state keeps exactly
+one reader.
+
+That boundary is about *routing state* — the path, navigations, and search
+params — not about the object. `HandDetailPage` separately reads
+`window.location.origin` to turn a share token into an absolute URL, which
+touches nothing the router owns and needs no route to change. Read the rule
+as "no page derives routing state for itself," not "no page may name
+`window.location`."
 
 **Where a navigation lands is the app's call, not the browser's.**
 `router.js` sets `history.scrollRestoration = 'manual'` and scrolls to the top
@@ -931,10 +993,11 @@ for anything visual: sample the DOM across the animation and read the
 picture. "The logic is right" is not evidence that the screen is.
 
 **A hand has two pages, because it has two lookups.** `/hands/:id` is the
-owner's, gated by `RequireAuth` in `AppShell.pageFor` — at the route table,
-so one place decides which routes need a session rather than each page
-checking for itself. `/shared/:token` is public: its own route, its own page
-(`SharedHandPage`), hitting its own endpoint (`GET /api/shared-hands/:token`).
+owner's (`pages/HandDetailPage.js`), gated by `RequireAuth` in
+`AppShell.pageFor` — at the route table, so one place decides which routes
+need a session rather than each page checking for itself. `/shared/:token` is
+public: its own route, its own page (`pages/SharedHandPage.js`), hitting its
+own endpoint (`GET /api/shared-hands/:token`).
 
 The split is not a frontend preference; it follows the server, where a hand's
 id stopped being publicly readable and a share token became the only other
@@ -1203,6 +1266,53 @@ with the publicly-known development default.
 Note what this replaces: the old `?share=1` plus `localStorage` scheme was
 explicitly "what the page offers, not what the server permits." This is the
 server permitting, and the difference is the whole point.
+
+### How a password is stored, and how a session is checked
+
+Three small modules hold all of it, and the claims above depend on each of
+them being what it is.
+
+**`src/server/auth/passwords.js`** hashes with Node's built-in
+`crypto.scrypt` rather than bcrypt or argon2 — scrypt is a respected,
+memory-hard KDF already in the standard library, and reaching for a package
+here would be the reflex this project's dependency rule exists to resist. It
+imports nothing from the rest of the app, so it is the one file to read
+closely when auditing how passwords are handled. Two decisions inside it are
+load-bearing:
+
+- **The stored format is self-describing**: `scrypt:N:r:p:salt:hash`, with
+  the cost parameters written alongside the hash rather than assumed from
+  whatever constants are in the file today. That is what lets `N`/`r`/`p`
+  be raised later — a faster server, a few years of Moore's law — without
+  invalidating every password hashed under the old ones, because
+  verification reads the parameters a hash was actually created with.
+- **Comparison is `timingSafeEqual`, not `===`.** Comparing byte-by-byte
+  and stopping at the first mismatch leaks, through response timing, how
+  many leading bytes a guess got right. The lengths are checked explicitly
+  before that call, because the derived length comes from parameters read
+  out of the *stored* hash, not from this module's own constants.
+
+**`src/server/services/AuthService.js`** holds one rule the threat model
+above genuinely rests on: **login returns the identical error whether the
+email has no account or the password was wrong.** Both paths throw the same
+`ApiError.unauthorized('Invalid email or password.')` from the same local
+helper. Distinguishing them is exactly enough to enumerate which emails have
+accounts here, one guess at a time — the same reasoning that makes a hand
+that isn't yours a 404 rather than a 403, applied to accounts instead of
+hands. A malformed payload is still a 400; that says nothing about whether
+an account exists.
+
+**`src/server/middleware/requireAuth.js`** is what every `/api/hands` route
+runs through. It reads the **signed** session cookie — not a bearer header —
+and puts `req.userId` on the request for the route to use. The cookie choice
+follows from this being a same-origin app serving its own client: nothing
+here benefits from a token the browser is expected to attach by hand, and an
+`httpOnly` cookie is both simpler for the client and unreadable to any
+script on the page, which a token in `localStorage` never is. It also owns
+`SESSION_COOKIE_NAME`, which `authRoutes.js` imports to set and clear the
+same cookie — one constant, so the writer and the reader cannot drift onto
+different names. A missing cookie and an expired session are both 401, with
+different messages.
 
 ## Roadmap
 
