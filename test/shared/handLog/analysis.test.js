@@ -434,6 +434,36 @@ describe('contestingSeats and determineWinners', () => {
     assert.deepEqual(contestingSeats(hand), [3, 4]);
     assert.deepEqual(determineWinners(hand), [], 'seat 4 got to the river with no cards on record');
   });
+
+  it('will not name a winner off a board that is only half dealt', () => {
+    // Built by hand rather than through `validateHandLogRequest`, which is the
+    // whole point: validation strips the `null` holes, so a *stored* hand can
+    // never reach this state. `HandBuilderForm` renders live totals from the
+    // unsaved hand on every keystroke, and the editor pre-sizes each street's
+    // board to its full width -- so a flop holding one real card is an array
+    // of length 3, and counting slots made a three-card board look complete.
+    const hand = createEmptyHand({ seatCount: 2 });
+    hand.seats[0] = { ...hand.seats[0], cards: ['Ah', 'Kd'], stack: 1000, isHero: true };
+    hand.seats[1] = { ...hand.seats[1], cards: ['Qs', 'Qc'], stack: 1000, isHero: false };
+    hand.streets.preflop.actions = [
+      { seatNumber: 0, type: 'raise', amount: 100 },
+      { seatNumber: 1, type: 'call', amount: 100 }
+    ];
+    hand.streets.flop.board = ['2c', null, null];
+    hand.streets.turn.board = ['7d'];
+    hand.streets.river.board = ['9h'];
+
+    assert.deepEqual(contestingSeats(hand), [0, 1], 'both seats are still in it');
+    assert.deepEqual(
+      determineWinners(hand),
+      [],
+      'five slots but three real cards -- the hand does not say who won yet'
+    );
+
+    // The same hand, once the flop is genuinely finished, still settles.
+    hand.streets.flop.board = ['2c', '5s', 'Jd'];
+    assert.deepEqual(determineWinners(hand), [1], 'queens beat ace-high on 2c5sJd7d9h');
+  });
 });
 
 describe('evaluateShowdown', () => {

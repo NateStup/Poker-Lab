@@ -42,14 +42,20 @@ export class HandLogRepository {
    */
   async create(hand, userId) {
     const id = randomUUID();
-    const createdAt = new Date().toISOString();
 
-    await this.pool.query(
-      'INSERT INTO hands (id, user_id, data, created_at) VALUES ($1, $2, $3, $4)',
-      [id, userId, JSON.stringify(hand), createdAt]
+    // `RETURNING` rather than a hand-built return value, so this goes through
+    // `rowToHand` like every other read here and one record type has one
+    // shape -- the old literal omitted `shareToken` entirely, so a hand came
+    // back from `POST` without a key that `GET` always sets. It also lets the
+    // column's own `DEFAULT now()` be the only clock: generating `createdAt`
+    // in JavaScript to insert it explicitly was a second one for no gain,
+    // since the same round trip hands it back.
+    const { rows } = await this.pool.query(
+      `INSERT INTO hands (id, user_id, data) VALUES ($1, $2, $3) RETURNING ${SELECT_COLUMNS}`,
+      [id, userId, JSON.stringify(hand)]
     );
 
-    return { id, createdAt, ...hand };
+    return rowToHand(rows[0]);
   }
 
   /**

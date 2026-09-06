@@ -5,6 +5,15 @@
  * hands -- `userId` threads through every method that used to just take an
  * `id`, and "not found" covers both "doesn't exist" and "isn't yours" with
  * no way for a caller to tell the two apart, which is the point.
+ *
+ * Ownership is checked *by the write itself*, never by a read before it.
+ * `HandLogRepository` folds the caller into every statement, so an owner-
+ * scoped `UPDATE`/`DELETE` either touches the caller's own row or touches
+ * nothing -- and a `SELECT` beforehand to confirm what the write is about to
+ * re-confirm buys nothing except a window for the row to disappear in. Every
+ * write here therefore reports its own miss through `#found`. `update` is the
+ * lone exception and only half of one: it reads first for the record it has
+ * to merge the patch over, and still checks the write's result afterwards.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -59,12 +68,17 @@ export class HandLogService {
    * @returns {Promise<object>}
    */
   async update(id, userId, payload) {
+    // The one method that genuinely needs the read before the write: the
+    // patch is merged over the stored record, so the stored record has to be
+    // in hand first. The write's own result is still checked below -- the row
+    // can disappear between the two, and this is the only place that window
+    // is unavoidable rather than self-inflicted.
     const existing = await this.#requireOwned(id, userId);
 
     const { valid, errors, value } = validateHandLogRequest({ ...existing, ...payload });
     if (!valid) throw ApiError.badRequest('The hand is invalid.', errors);
 
-    return this.#decorate(await this.repository.update(id, userId, value));
+    return this.#decorate(this.#found(await this.repository.update(id, userId, value)));
   }
 
   /**
@@ -73,8 +87,11 @@ export class HandLogService {
    * @returns {Promise<boolean>}
    */
   async remove(id, userId) {
-    await this.#requireOwned(id, userId);
-    return this.repository.remove(id, userId);
+    // `repository.remove` answers a boolean rather than a hand, so it does not
+    // fit `#found`'s shape -- checked directly rather than wrapped in a fake
+    // truthy object to force it through.
+    if (!await this.repository.remove(id, userId)) throw ApiError.notFound('Hand not found');
+    return true;
   }
 
   /**
@@ -84,9 +101,8 @@ export class HandLogService {
    * @returns {Promise<object>} the decorated hand, including the new `shareToken`
    */
   async share(id, userId) {
-    await this.#requireOwned(id, userId);
     const token = randomBytes(SHARE_TOKEN_BYTES).toString('base64url');
-    return this.#decorate(await this.repository.setShareToken(id, userId, token));
+    return this.#decorate(this.#found(await this.repository.setShareToken(id, userId, token)));
   }
 
   /**
@@ -96,8 +112,7 @@ export class HandLogService {
    * @returns {Promise<void>}
    */
   async unshare(id, userId) {
-    await this.#requireOwned(id, userId);
-    await this.repository.setShareToken(id, userId, null);
+    this.#found(await this.repository.setShareToken(id, userId, null));
   }
 
   /**
@@ -118,14 +133,31 @@ export class HandLogService {
   }
 
   /**
+   * A miss from the repository is a 404, in one place.
+   *
+   * Every owner-scoped statement folds the caller into the query itself
+   * (`WHERE id = $1 AND user_id = $2`), so a `null` back means the hand does
+   * not exist *or* is not this caller's -- deliberately indistinguishable
+   * from outside. It also covers the row vanishing between two statements,
+   * which is why the writes check their own result rather than trusting a
+   * read that happened earlier.
+   *
+   * @param {object|null} value
+   * @returns {object}
+   * @throws {ApiError} 404 when there is nothing there
+   */
+  #found(value) {
+    if (!value) throw ApiError.notFound('Hand not found');
+    return value;
+  }
+
+  /**
    * @param {string} id
    * @param {string} userId
    * @returns {Promise<object>}
    */
   async #requireOwned(id, userId) {
-    const hand = await this.repository.findOwned(id, userId);
-    if (!hand) throw ApiError.notFound('Hand not found');
-    return hand;
+    return this.#found(await this.repository.findOwned(id, userId));
   }
 
   /** @param {object} hand @returns {object} a lightweight shape for list views */

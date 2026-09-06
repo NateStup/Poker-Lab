@@ -206,20 +206,27 @@ export function contestingSeats(hand) {
  *    not say who won, and inventing an answer would be worse than admitting
  *    it: the pot shows as unawarded and the UI asks for what's missing.
  *
- * @param {object} hand a validated hand record
+ * @param {object|import('./actions.js').DraftHand} hand a stored hand record,
+ *   or one still being edited (whose boards may carry `null` holes)
  * @returns {number[]} winning seat numbers, ascending; empty when undetermined
  */
 export function determineWinners(hand) {
   const live = contestingSeats(hand);
   if (live.length === 1) return live;
 
-  const boardSize = Object.values(hand.streets).reduce((size, street) => size + street.board.length, 0);
-  if (live.length < 2 || boardSize < BOARD_SIZE) return [];
+  // Real cards, not slots. A hand still being edited pre-sizes each street's
+  // board to its full width and fills the holes in as cards are picked, so
+  // `board.length` counts a flop of one card as three. Measuring the array
+  // that actually gets evaluated -- rather than a separate count of what it
+  // might hold -- is what keeps the gate and the evaluation talking about the
+  // same board: `evaluateHand` drops the holes silently, so a mismatch here
+  // scored a five-card board that was really three and named a winner for it.
+  const board = Object.values(hand.streets).flatMap(street => street.board).filter(Boolean);
+  if (live.length < 2 || board.length < BOARD_SIZE) return [];
 
   const known = live.filter(seat => hand.seats[seat].cards.filter(Boolean).length === HOLE_CARD_COUNT);
   if (known.length !== live.length) return [];
 
-  const board = Object.values(hand.streets).flatMap(street => street.board);
   const scores = live.map(seat => evaluateHand([...hand.seats[seat].cards, ...board]));
   return findWinners(scores).map(index => live[index]);
 }

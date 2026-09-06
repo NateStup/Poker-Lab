@@ -157,6 +157,11 @@ describe('HandLogRepository', { skip }, () => {
     assert.ok(hand.id, 'expected a generated id');
     assert.ok(hand.createdAt, 'expected a createdAt timestamp');
     assert.equal(hand.name, 'Aces cracked');
+    // One record type, one shape: `create` returns through the same row
+    // mapper every read here uses, so a freshly created hand carries the
+    // `shareToken` key rather than leaving callers to tell `null` from
+    // `undefined` depending on which method handed them the hand.
+    assert.equal(hand.shareToken, null, 'a created hand is unshared, not missing the key');
 
     const { rows } = await pool.query('SELECT user_id, data FROM hands WHERE id = $1', [hand.id]);
     assert.equal(rows.length, 1);
