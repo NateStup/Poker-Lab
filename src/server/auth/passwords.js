@@ -1,10 +1,11 @@
 /**
  * Password hashing, using Node's built-in `crypto.scrypt` rather than a
- * dependency like bcrypt or argon2 -- this project is at three dependencies
- * for a reason, and scrypt is a respected, memory-hard KDF already sitting in
- * the standard library. Isolated in its own module, with no imports from the
- * rest of the app, so it's the one file worth reading closely if anyone ever
- * needs to audit how passwords are handled here.
+ * dependency like bcrypt or argon2 -- this codebase adds dependencies
+ * deliberately rather than reflexively, and scrypt is a respected,
+ * memory-hard KDF already sitting in the standard library. Isolated in its
+ * own module, with no imports from the rest of the app, so it's the one file
+ * worth reading closely if anyone ever needs to audit how passwords are
+ * handled here.
  *
  * The stored format is self-describing -- `scrypt:N:r:p:salt:hash`, with the
  * cost parameters written alongside the hash rather than assumed from

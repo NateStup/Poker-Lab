@@ -51,8 +51,12 @@ export function navigate(path) {
  * Scrolling here instead means the document only ever shrinks while the
  * viewport is already at the top, so there is no offset left to clamp. It
  * belongs in this module rather than in a component effect for the same reason
- * `useSearchParam` does: one reader and one writer of `window.location` and
- * the history, and no page has to remember to do it.
+ * `useSearchParam` does: this is the only module that reads or writes
+ * `window.location` and the history *for routing* -- the path, navigations
+ * and search params -- and no page has to remember to do it. A page reading
+ * `window.location.origin` to build an absolute URL (as `HandDetailPage`
+ * does for a share link) touches none of that state and is not an exception
+ * to it.
  */
 function notify() {
   const path = window.location.pathname;
@@ -109,12 +113,11 @@ export function useRoute() {
 /**
  * Read one query-string parameter, re-reading it on every navigation.
  *
- * Query handling lives here rather than in the page that wants it so there is
- * still exactly one module that touches `window.location` -- the login
- * redirect's `?next=` (read by `useAuthRedirectTarget` in
- * `context/AuthContext.js`, written by `RequireAuth` when it turns someone
- * away) is what needs a parameter, and it shouldn't be the reason a page
- * starts reaching for the URL itself.
+ * Query handling lives here rather than in the page that wants it so that
+ * routing state has exactly one reader. The login redirect's `?next=` (read
+ * by `useAuthRedirectTarget` in `context/AuthContext.js`, written by
+ * `RequireAuth` when it turns someone away) is what needs a parameter, and it
+ * shouldn't be the reason a page starts reaching for the URL itself.
  *
  * @param {string} name
  * @returns {string|null}
