@@ -105,10 +105,34 @@ export function commitIncrement(amount, alreadyCommitted, remainingStack) {
 }
 
 /**
+ * A hand as the editor holds it, before anything has been saved.
+ *
+ * It differs from a stored hand in exactly one way that matters here: a
+ * street's `board` is pre-sized to its full width the moment the street is
+ * reached and its cards are filled in one at a time, so the array carries
+ * `null` holes while a street is half-dealt. `validateHandLogRequest` strips
+ * those on save, which is why a *stored* hand never has them -- but
+ * `HandBuilderForm` renders live totals from an unsaved hand on every
+ * keystroke, so this shape is a real, permanent caller of the functions
+ * below, not a transitional state anything can assume away.
+ *
+ * @typedef {object} DraftHand
+ * @property {Array<{cards: Array<string|null>, stack: number, isHero: boolean}>} seats
+ * @property {number} buttonSeat
+ * @property {object} format
+ * @property {Record<string, {board: Array<string|null>, actions: object[], notes: string}>} streets
+ */
+
+/**
  * Every number a logged hand displays: pot progression, per-seat
  * contributions, ending stacks, and who won what.
  *
- * @param {object} hand a validated hand record
+ * Accepts a stored hand or a {@link DraftHand}. Anything reading the board
+ * here must count real cards rather than array slots -- see
+ * `determineWinners` in `analysis.js`, where assuming otherwise scored a
+ * three-card board as complete and named a winner off it.
+ *
+ * @param {object|DraftHand} hand a stored hand record, or one still being edited
  * @returns {{
  *   positions: string[],
  *   forcedBets: Array<{seatNumber: number, type: string, amount: number}>,
