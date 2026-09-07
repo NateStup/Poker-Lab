@@ -80,6 +80,13 @@ export function HandDetailView({ hand, actions, isSharedView = false }) {
  * page for the same reason. Client-side only: the response this app already
  * fetched has everything in it, so there's nothing further to ask the
  * server for.
+ *
+ * The anchor is appended to the document before the click and removed right
+ * after, and the revoke is deferred a tick rather than called synchronously
+ * -- clicking an anchor that was never in the document, then revoking its
+ * blob URL in the same tick, has a history of racing in Safari specifically:
+ * the download can be revoked before the browser has actually started
+ * reading the blob, which silently fails it.
  * @param {object} hand
  */
 export function downloadHand(hand) {
@@ -89,7 +96,9 @@ export function downloadHand(hand) {
   const link = document.createElement('a');
   link.href = url;
   link.download = `${(hand.name || 'hand').replace(/[^\w.-]+/g, '_')}.json`;
+  document.body.appendChild(link);
   link.click();
+  document.body.removeChild(link);
 
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

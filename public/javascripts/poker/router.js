@@ -29,8 +29,7 @@ if ('scrollRestoration' in window.history) {
  */
 export function navigate(path) {
   if (path === window.location.pathname) return;
-  window.history.pushState(null, '', path);
-  pushedEntries += 1;
+  window.history.pushState({ depth: (window.history.state?.depth ?? 0) + 1 }, '', path);
   notify();
 }
 
@@ -65,34 +64,43 @@ function notify() {
 }
 
 /**
- * How many navigations this app has pushed onto the history stack. A shared
- * link opened cold starts at zero, and calling `history.back()` there would
- * leave the app entirely -- so `goBack` needs to know the difference between
- * "somewhere to return to" and "this is where the user arrived".
- */
-let pushedEntries = 0;
-
-/**
  * Return to wherever the user came from.
+ *
+ * Whether there is somewhere to go back to is read off the entry the browser
+ * is actually sitting on -- `history.state.depth`, stamped there by
+ * `navigate` -- rather than tracked in a separate counter incremented on push
+ * and decremented on `popstate`. A counter of that shape used to live here,
+ * and it was wrong: `popstate` fires identically for forward navigation and
+ * back navigation, so a listener that always decrements goes wrong the
+ * moment a user goes back and then forward again -- clamped at zero from the
+ * first `popstate`, with nothing in the second one to say "actually, that
+ * was a step forward, undo the decrement." A shared link opened cold has no
+ * entry to pop at all, which is what `depth` being absent (rather than zero)
+ * on that first entry expresses.
+ *
+ * This is the same shape of bug the hand replayer's fullscreen toggle already
+ * hit once: `isFullscreen` had to be set from the `fullscreenchange` event
+ * itself, never from the click handler that requested it, because the
+ * handler has no way to know about every way fullscreen can end (Escape, the
+ * browser's own exit control, navigating away). Both bugs are the same
+ * mistake -- inferring state from *an event having fired* instead of reading
+ * it from whatever actually holds the answer -- and the fix is the same
+ * shape too: read the browser's own state instead of re-deriving it.
  *
  * @param {string} [fallback] where to go when there is no in-app history to
  *   pop -- the case that matters is a shared hand opened in a fresh tab
  * @returns {void}
  */
 export function goBack(fallback = '/') {
-  if (pushedEntries > 0) {
-    // popstate fires on its own and notifies subscribers; the counter is
-    // decremented there so a browser-button back stays in step too.
+  if ((window.history.state?.depth ?? 0) > 0) {
+    // popstate fires on its own and notifies subscribers.
     window.history.back();
     return;
   }
   navigate(fallback);
 }
 
-window.addEventListener('popstate', () => {
-  pushedEntries = Math.max(0, pushedEntries - 1);
-  notify();
-});
+window.addEventListener('popstate', notify);
 
 /**
  * Subscribe to the current pathname. The calling component re-renders on
