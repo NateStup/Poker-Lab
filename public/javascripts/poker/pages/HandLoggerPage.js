@@ -79,7 +79,7 @@ export function HandLoggerPage() {
     'div',
     { className: 'hero-card' },
     e('h1', null, 'Hand Logger'),
-    e('p', { className: 'small' }, 'Recreate a hand you played, note your thinking street by street, and keep a link to it.'),
+    e('p', { className: 'small' }, "Recreate a hand you played and note your thinking street by street. It's yours alone unless you choose to share a read-only link."),
 
     e('button', { type: 'button', onClick: () => setShowForm(true) }, '+ Log a hand'),
 

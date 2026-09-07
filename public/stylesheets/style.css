@@ -914,11 +914,6 @@ button:disabled {
   color: var(--color-danger-light);
 }
 
-.placeholder-card {
-  border-style: dashed;
-  border-color: var(--border-slate-strong);
-}
-
 /* A result card sitting directly under a form needs its own gap: the form's
    grid gap stops at the form's edge, so without this the card crowds the
    submit button rather than reading as the next thing on the page. */

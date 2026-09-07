@@ -95,7 +95,7 @@ export function AppShell() {
     e(
       'footer',
       { className: 'site-footer' },
-      e('p', { className: 'small' }, 'Poker Lab — a portfolio poker toolkit.')
+      e('p', { className: 'small' }, 'Poker Lab — a full-stack poker toolkit, built end to end as a portfolio project.')
     )
   );
 }

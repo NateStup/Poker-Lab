@@ -75,11 +75,7 @@ export function EquityResult({ result, outs, isLoading, error }) {
   }
 
   if (!result) {
-    return e(
-      'div',
-      { className: 'result-card placeholder-card' },
-      e('p', { className: 'footnote' }, 'Pick two hole cards for each player, then calculate.')
-    );
+    return null;
   }
 
   const isExact = result.method === 'exact';
