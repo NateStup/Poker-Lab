@@ -20,6 +20,7 @@
 
 import { computeClockState, generateBlindStructure, suggestPayoutSplit } from '/shared/tournament/index.js';
 import { BackButton } from '../components/BackButton.js';
+import { useAuth } from '../context/AuthContext.js';
 import { TournamentClock } from '../components/TournamentClock.js';
 import { TournamentPayouts } from '../components/TournamentPayouts.js';
 import { TournamentRoster } from '../components/TournamentRoster.js';
@@ -160,7 +161,20 @@ function CreateTournamentForm({ onCreate, onCancel }) {
   );
 }
 
-function TournamentListView({ tournaments, isLoading, error, showCreateForm, onShowCreate, onCreate, onCancelCreate, onOpen, onDelete }) {
+function TournamentListView({
+  tournaments,
+  isLoading,
+  error,
+  showCreateForm,
+  onShowCreate,
+  onCreate,
+  onCancelCreate,
+  onOpen,
+  onDelete,
+  isAuthenticated,
+  mineOnly,
+  onChangeMineOnly
+}) {
   return e(
     'div',
     { className: 'hero-card' },
@@ -170,6 +184,22 @@ function TournamentListView({ tournaments, isLoading, error, showCreateForm, onS
     showCreateForm
       ? e(CreateTournamentForm, { onCreate, onCancel: onCancelCreate })
       : e('button', { type: 'button', onClick: onShowCreate }, '+ New tournament'),
+
+    // Visible only when logged in -- a logged-out visitor has no "mine" to
+    // scope to, so the control simply isn't there rather than being shown
+    // disabled.
+    !showCreateForm && isAuthenticated
+      ? e(
+          'label',
+          { className: 'footnote' },
+          e('input', {
+            type: 'checkbox',
+            checked: mineOnly,
+            onChange: ev => onChangeMineOnly(ev.target.checked)
+          }),
+          ' My tournaments'
+        )
+      : null,
 
     error ? e('p', { className: 'footnote range-notation-error' }, error) : null,
 
@@ -215,10 +245,12 @@ function TournamentListView({ tournaments, isLoading, error, showCreateForm, onS
 }
 
 export function TournamentManagerPage() {
+  const { status: authStatus } = useAuth();
   const [tournaments, setTournaments] = React.useState([]);
   const [isLoadingList, setIsLoadingList] = React.useState(true);
   const [listError, setListError] = React.useState(null);
   const [showCreateForm, setShowCreateForm] = React.useState(false);
+  const [mineOnly, setMineOnly] = React.useState(false);
 
   const [tournament, setTournament] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -227,10 +259,18 @@ export function TournamentManagerPage() {
   const advancingRef = React.useRef(false);
   const lastLevelRef = React.useRef(null);
 
+  // A logged-out visitor's behavior stays exactly as it is today, with no
+  // way to reach a "mine"-filtered list -- if a session ends while the
+  // toggle happened to be on, this puts it back rather than leaving a
+  // filter active with nothing on screen to show it's there.
+  React.useEffect(() => {
+    if (authStatus !== 'authenticated') setMineOnly(false);
+  }, [authStatus]);
+
   const refreshList = React.useCallback(async () => {
     setIsLoadingList(true);
     try {
-      const page = await fetchTournaments({ limit: 50 });
+      const page = await fetchTournaments({ limit: 50, mine: mineOnly });
       setTournaments(page.items);
       setListError(null);
     } catch (err) {
@@ -238,7 +278,7 @@ export function TournamentManagerPage() {
     } finally {
       setIsLoadingList(false);
     }
-  }, []);
+  }, [mineOnly]);
 
   React.useEffect(() => {
     refreshList();
@@ -349,7 +389,10 @@ export function TournamentManagerPage() {
       onCreate: handleCreate,
       onCancelCreate: () => setShowCreateForm(false),
       onOpen: openTournament,
-      onDelete: handleDeleteFromList
+      onDelete: handleDeleteFromList,
+      isAuthenticated: authStatus === 'authenticated',
+      mineOnly,
+      onChangeMineOnly: setMineOnly
     });
   }
 

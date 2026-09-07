@@ -249,11 +249,15 @@ export function createTournament(payload) {
 
 /**
  * Fetch a page of tournaments, newest first (lightweight summaries only).
- * @param {{limit?: number, offset?: number}} [query]
+ * @param {{limit?: number, offset?: number, mine?: boolean}} [query] `mine`
+ *   scopes the page to the caller's own tournaments; omitted or `false`
+ *   returns every tournament regardless of ownership, exactly as before
+ *   accounts existed
  * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
  */
-export function fetchTournaments({ limit = 20, offset = 0 } = {}) {
+export function fetchTournaments({ limit = 20, offset = 0, mine = false } = {}) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (mine) params.set('mine', 'true');
   return request(`/api/tournaments?${params}`);
 }
 

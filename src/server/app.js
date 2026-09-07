@@ -15,6 +15,7 @@ import morgan from 'morgan';
 
 import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { createOptionalAuth } from './middleware/optionalAuth.js';
 import { createRequireAuth } from './middleware/requireAuth.js';
 import { createApiRouter } from './routes/index.js';
 import { AuthService } from './services/AuthService.js';
@@ -60,6 +61,7 @@ export async function createApp({ historyRepository, tournamentRepository, handL
   const sessionsRepository = createSessionsRepository();
   const authService = new AuthService({ usersRepository, sessionsRepository });
   const requireAuth = createRequireAuth({ sessionsRepository });
+  const optionalAuth = createOptionalAuth({ sessionsRepository });
 
   const app = express();
 
@@ -92,6 +94,7 @@ export async function createApp({ historyRepository, tournamentRepository, handL
     authService,
     sessionsRepository,
     requireAuth,
+    optionalAuth,
     historyRepository: repository
   }));
 

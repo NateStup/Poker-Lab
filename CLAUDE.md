@@ -1207,7 +1207,7 @@ waits at `0:00` rather than silently skipping levels in the background.
 | `DELETE` | `/api/history/:id` | Delete one |
 | `DELETE` | `/api/history` | Clear all |
 | `POST` | `/api/tournaments` | Create a tournament |
-| `GET` | `/api/tournaments` | List tournaments (lightweight summaries) |
+| `GET` | `/api/tournaments` | List tournaments (lightweight summaries); `mine=true` scopes the page to the caller's own |
 | `GET` | `/api/tournaments/:id` | Full record, decorated with `derived` (clock, stats, payouts) |
 | `PATCH` | `/api/tournaments/:id` | Update settings; only while `status === 'setup'`, except a payout-split-only patch, which is also allowed once registration has closed |
 | `DELETE` | `/api/tournaments/:id` | Delete a tournament |
@@ -1266,6 +1266,32 @@ with the publicly-known development default.
 Note what this replaces: the old `?share=1` plus `localStorage` scheme was
 explicitly "what the page offers, not what the server permits." This is the
 server permitting, and the difference is the whole point.
+
+### Who a tournament belongs to, optionally
+
+Unlike a hand, a tournament needs no account at all — creating one, running
+its clock, and editing its roster all work exactly as they did before
+accounts existed, and that stays true for anyone who never logs in. Logging
+in only adds a capability on top: a tournament created while signed in is
+stamped with its creator's `userId`, and from then on only that account can
+mutate it — everyone else, logged in or not, gets the same 404 a stranger
+gets on someone else's hand. An ownerless tournament (the only kind before
+this feature, and still the default for anyone not signed in) stays exactly
+as open to anyone as it always was. Reads are never gated, regardless of
+ownership — the question an owner answers is "who can change this," never
+"who can see this."
+
+The check itself, `TournamentService#assertMutable`, is a read-then-check
+rather than an atomic SQL condition the way a hand's ownership is folded
+into one statement (`WHERE id = $1 AND user_id = $2`). See that method's own
+comment for why that trade-off is deliberate here: a shared clock/roster
+tool reopening a brief ownership-check race is a different risk profile than
+a private hand record doing the same.
+
+`GET /api/tournaments?mine=true` scopes the list to the caller's own
+tournaments. Omitted, `false`, or sent with no session at all, the list is
+unfiltered — every tournament, owned or not, exactly as before this feature
+existed.
 
 ### How a password is stored, and how a session is checked
 
