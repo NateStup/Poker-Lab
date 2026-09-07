@@ -179,7 +179,7 @@ function TournamentListView({
     'div',
     { className: 'hero-card' },
     e('h1', null, 'Tournament Manager'),
-    e('p', { className: 'small' }, 'Register players, run the blind clock, and see live stack and payout math.'),
+    e('p', { className: 'small' }, 'Register players, run the blind clock, and see live stack and payout math. Log in to save the tournaments you create and find them again later.'),
 
     showCreateForm
       ? e(CreateTournamentForm, { onCreate, onCancel: onCancelCreate })

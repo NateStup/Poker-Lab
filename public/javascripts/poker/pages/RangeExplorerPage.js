@@ -316,7 +316,8 @@ export function RangeExplorerPage() {
                 'div',
                 { className: 'range-legend' },
                 e('span', { className: 'range-legend-item' },
-                  e('span', { className: 'range-legend-swatch role-villain' }), 'Selected')
+                  e('span', { className: 'range-legend-swatch role-villain' }), 'Selected'),
+                e('span', null, 'Click, drag, or use the slider.')
               ),
               e(
                 'div',

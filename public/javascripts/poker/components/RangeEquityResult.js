@@ -78,11 +78,7 @@ export function RangeEquityResult({ result, isLoading, error, villainMode }) {
   }
 
   if (!result) {
-    return e(
-      'div',
-      { className: 'result-card placeholder-card' },
-      e('p', { className: 'footnote' }, 'Build a hero range and pick an opponent, then calculate.')
-    );
+    return null;
   }
 
   return e(
