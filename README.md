@@ -4,12 +4,15 @@ A client/server poker toolkit built on Node, Express, and React — a Texas
 Hold'em odds calculator with persistent history and exact outs, a range
 explorer for range-vs-hand and range-vs-range equity, a tournament manager
 with a live blind clock and payouts, and a hand logger that replays a saved
-hand action by action from a shareable link.
+hand action by action. Accounts are real: a saved hand belongs to whoever
+logged it and is reachable by nobody else, unless its owner generates a
+revocable link to share it read-only.
 
 Built as a portfolio project, so the emphasis is on architecture that holds up
 under reading: a pure domain layer shared verbatim between server and browser,
-dependency-injected services, a swappable data store, and tests that assert on
-provable poker facts rather than on coincidence.
+dependency-injected services, a data layer that's genuinely relational where
+ownership needs enforcing and a swappable generic store where it doesn't, and
+tests that assert on provable poker facts rather than on coincidence.
 
 ## Quick start
 
@@ -21,7 +24,7 @@ npm start
 
 ```bash
 npm run dev    # auto-restart on change
-npm test       # 397 tests, no test framework dependency
+npm test       # 474 tests, no test framework dependency
 ```
 
 Requires **Node 20.11 or newer**. No build step — the frontend is served as
@@ -44,8 +47,12 @@ filename, so a second run reports nothing to apply. It is deliberately not run
 on boot: a schema change is a deploy step, not a side effect of starting the
 app.
 
-No database to hand? `STORE_DRIVER=json npm start` runs against the JSON files
-in `data/` exactly as before.
+Postgres is required now, not optional — accounts, sessions, and hand
+ownership are relational and have no honest JSON-file equivalent.
+`STORE_DRIVER=json` still exists internally for `history` and `tournaments`,
+but `npm start` builds every repository at boot, so setting it refuses to
+start the app at all rather than running a quietly incomplete one. See
+[CLAUDE.md](CLAUDE.md) for why that's a deliberate failure, not a bug.
 
 ## What it does
 
@@ -95,13 +102,20 @@ auto-declared the winner. A live blind clock (with a suggested structure you
 can edit) counts down locally in the browser between server syncs, chimes on
 every level change, and pauses/resumes/advances on command. A payout panel
 computes amounts from the prize pool and a percentage split the moment there's
-money in the pool, before anyone's even been eliminated.
+money in the pool, before anyone's even been eliminated. No account is needed
+to create or run one — logging in is optional, and only changes one thing: a
+tournament created while logged in remembers whose it is, is only editable by
+that account from then on, and can be filtered to "just mine" in the list.
 
-**Hand Logger.** Recreate a hand you played on a table diagram — seats, stacks,
-who was on the button — then log the betting street by street and write down
-what you were thinking. Saving it produces a link that replays the hand action
-by action: each street dealt, each bet pushed out in front of a seat and swept
-into the middle, each fold greyed out, the pot settled at the end.
+**Hand Logger.** Requires an account. Recreate a hand you played on a table
+diagram — seats, stacks, who was on the button — then log the betting street
+by street and write down what you were thinking. A saved hand is private to
+the account that logged it, and replays action by action: each street dealt,
+each bet pushed out in front of a seat and swept into the middle, each fold
+greyed out, the pot settled at the end. Sharing is explicit and revocable —
+generating a link hands out a read-only view with no login and no edit
+access, and revoking it stops the link working without touching the hand
+itself.
 
 It is a logger, not a rules engine, and the line it holds is that impossible
 *data* is rejected while merely odd *poker* is not. A turn dealt before a flop
@@ -156,21 +170,25 @@ src/
     app.js                 Express assembly (exported as a factory)
     server.js              Process lifecycle: bind, log, graceful shutdown
     config.js              All environment resolution, in one place
+    auth/                  Password hashing (scrypt, self-describing hash format)
     routes/                Thin HTTP handlers built by dependency-taking factories
     services/              Orchestration between domain and store
-    store/                 DataStore → {JsonFileStore, PostgresStore} → {History,Tournament,HandLog}Repository
-    middleware/            Error handling, async wrapper
+    store/                 DataStore → {JsonFileStore, PostgresStore} → {History,Tournament}Repository,
+                             plus HandLog/Users/SessionsRepository writing SQL directly
+    middleware/            Error handling, async wrapper, session auth (required + optional)
     errors/                ApiError
 public/                  Buildless frontend
   stylesheets/style.css   Design tokens (:root variables) + shared + per-page styles
   javascripts/poker/
     main.js                Bootstrap
     router.js              Minimal path-based client router (no dependency)
-    AppShell.js             Page shell: nav + route switch
-    pages/                  One component per route (OddsCalculator, RangeExplorer, TournamentManager, HandLogger, HandDetail)
+    AppShell.js             Page shell: nav + route switch, wraps everything in AuthProvider
+    context/                AuthContext.js — who's logged in, shared across the app
+    pages/                  One component per route (OddsCalculator, RangeExplorer,
+                              TournamentManager, HandLogger, HandDetail, SharedHand, Auth)
     components/             Presentational components, shared across pages (CardSlot, RangeGrid, PokerTable, HandReplay, ...)
     hooks/                  Stateful logic (useHistory)
-    services/               apiClient.js (all network access), handOwnership.js
+    services/               apiClient.js (all network access), tableTheme.js
 test/
   shared/                Domain tests (shared/tournament/ mirrors src/shared/tournament/)
   server/                Store and end-to-end API tests
@@ -201,31 +219,49 @@ what the server enforces.
 ```
 HTTP request → route → service → domain
                           ↓
-                    repository → store → disk
+              repository → store → database    (history, tournaments)
+              repository → database directly   (hands, users, sessions)
 ```
 
 Routes are created by factories that receive their dependencies
-(`createEquityRouter({equityService})`), and `createApp()` accepts an injected
-repository. That is what lets the API test suite boot the real middleware stack
-against a temp directory.
+(`createEquityRouter({equityService})`), and `createApp()` accepts injected
+repositories. Auth routes are the one exception to the diagram above -- they
+go straight from route to service to repository with no domain layer at all,
+since password hashing needs `node:crypto` and could never run in the shared,
+browser-safe domain code.
+
+This is what lets most of the API test suite boot the real middleware stack
+against a temp directory or a throwaway schema. The one documented exception
+is `/api/hands`'s own tests, which run against the real tables -- see
+"Testing" below for why, and what protects against that being unsafe.
 
 ### Data store
 
 `DataStore` defines the contract; `JsonFileStore` implements it over JSON files
-and `PostgresStore` over one table per collection; `HistoryRepository`,
-`TournamentRepository` and `HandLogRepository` each expose a domain-level API on
-top of whichever of the two they were handed. Services depend on the repository,
-never on a concrete store, which is what made adding Postgres a new class and a
-branch in one factory rather than a change anywhere upstream — `STORE_DRIVER`
-picks between them at boot.
+and `PostgresStore` over one table per collection. `HistoryRepository` and
+`TournamentRepository` each expose a domain-level API on top of whichever of
+the two they were handed -- services depend on the repository, never on a
+concrete store, which is what made adding Postgres a new class and a branch in
+one factory rather than a change anywhere upstream. `STORE_DRIVER` still picks
+between them at boot for these two collections.
 
-Each Postgres table is `id`, `data JSONB`, `created_at`, `updated_at`: a
-faithful translation of the JSON record shape rather than a relational model,
-with `hands` the one earmarked for real columns once accounts exist. The one
-interface change the swap needed was `list({where})`, which went from a
-JavaScript predicate to a plain equality object — a closure cannot become a
-`WHERE` clause. Schema changes are hand-written `.sql` files in `migrations/`,
-applied by `npm run db:migrate` and tracked in a `schema_migrations` table.
+`HandLogRepository`, `UsersRepository`, and `SessionsRepository` don't go
+through `DataStore` at all -- they write SQL directly against tables with real
+columns and foreign keys (`hands.user_id`, `hands.share_token`, `users.email`,
+`sessions.expires_at`), because ownership, credentials, and revocable sharing
+are relationships a generic JSONB blob has no way to enforce. `hands` moved
+here once accounts existed to give it something to reference; `users` and
+`sessions` never had a JSON-file era at all. This is why `STORE_DRIVER=json`
+no longer boots the app -- see "Quick start" above.
+
+`history` and `tournaments` keep the original shape: `id`, `data JSONB`,
+`created_at`, `updated_at`, a faithful translation of the JSON record rather
+than a relational model, because neither has a relationship worth modelling.
+The one interface change the Postgres swap needed for these two was
+`list({where})`, which went from a JavaScript predicate to a plain equality
+object -- a closure cannot become a `WHERE` clause. Schema changes are
+hand-written `.sql` files in `migrations/`, applied by `npm run db:migrate`
+and tracked in a `schema_migrations` table.
 
 The file store is small but not naive — it guards against torn writes (temp file
 plus atomic rename), interleaved writes (a serialised flush chain), concurrent
@@ -325,6 +361,13 @@ payout split against the field's actual final size — a payout-split-only
 `PATCH` is accepted after the start once registration is closed, which is the
 one exception to settings being setup-only.
 
+No login is required for any of the above -- every route here runs under
+`optionalAuth`, not `requireAuth`. A tournament created while logged in
+remembers whose it is and can only be mutated by that account from then on
+(every other write stays open to anyone, exactly as before accounts existed);
+`GET /api/tournaments?mine=true` lists only the caller's own. Reads are never
+gated, regardless of ownership.
+
 `GET /api/tournaments/:id` decorates the stored record with `derived`,
 computed fresh on every read from `shared/tournament/`:
 
@@ -350,13 +393,31 @@ settings, which is "run the same event again with the same players".
 
 ### Hands
 
+Every route below requires a session -- there is no anonymous hand logging.
+A hand's `id` is private to the account that created it; every verb reports
+`404`, not `403`, for a hand that exists but isn't the caller's, since
+confirming "this exists, you just can't touch it" would be its own leak.
+
 ```
-POST   /api/hands           save a logged hand
-GET    /api/hands           list saved hands (lightweight summaries)
-GET    /api/hands/:id       full record + derived positions/pot/payouts
-PATCH  /api/hands/:id       edit; merged over the stored record, then validated in full
-DELETE /api/hands/:id       delete
+POST   /api/hands              save a logged hand
+GET    /api/hands              list the caller's own saved hands (lightweight summaries)
+GET    /api/hands/:id          full record + derived positions/pot/payouts (owner only)
+PATCH  /api/hands/:id          edit; merged over the stored record, then validated in full
+DELETE /api/hands/:id          delete
+POST   /api/hands/:id/share    issue (or replace) a read-only share token
+DELETE /api/hands/:id/share    revoke the share token, leaving the hand itself untouched
 ```
+
+```
+GET    /api/shared-hands/:token   the public, read-only view -- no session required
+```
+
+This last route is deliberately its own router, mounted at its own path, not
+a conditionally-unauthenticated branch of the router above -- so a future
+route landing in `handLogRoutes.js` can never inherit public access by
+accident. Sharing is a second identifier, not a permission on the first: a
+hand's own `id` never becomes reachable by anyone but its owner, however it's
+shared.
 
 A hand is a `name`, a table (`seats`, `buttonSeat`, `format`), four streets each
 with a `board`, `actions` and `notes`, and a `result` holding the user's own
@@ -408,6 +469,10 @@ half-dealt street.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/health` | Liveness probe |
+| `POST` | `/api/auth/signup` | Create an account and start a session |
+| `POST` | `/api/auth/login` | Start a session |
+| `POST` | `/api/auth/logout` | End the current session |
+| `GET` | `/api/auth/me` | The logged-in user, if any |
 | `GET` | `/api/history` | Records, newest first (`limit`, `offset`, `type`) |
 | `GET` | `/api/history/stats` | Aggregate counts |
 | `GET` | `/api/history/:id` | A single record |
@@ -432,10 +497,26 @@ Errors are consistently shaped, with field-level detail where it exists:
 npm test
 ```
 
-397 tests via Node's built-in runner — no Jest, Mocha, or Chai. The
-`PostgresStore` suite makes the same assertions against the other store
-implementation, and skips itself with a reason when no database is reachable,
-so the suite still passes without Docker running.
+474 tests via Node's built-in runner — no Jest, Mocha, or Chai. Five suites
+are Postgres-only (`/api/hands` and its cleanup check, `HandLogRepository`,
+`PostgresStore`, and `PostgresStore` durability) and skip themselves with a
+reason when no database is reachable, so the full suite still passes without
+Docker running -- at 421 instead of 474.
+
+Security-critical policy -- ownership scoping, and the identical error for a
+wrong password versus an unknown email -- is also asserted directly against
+`AuthService` and `HandLogService`, using in-memory fakes of their
+repositories rather than a real database. That coverage runs every time,
+regardless of Docker, precisely because the Postgres-backed suites above
+don't.
+
+`/api/hands`'s own tests are the one place still worth a caveat: they run
+against the real `hands`/`users`/`sessions` tables rather than a temp
+directory or a throwaway schema, since none of the three repositories behind
+them expose a table-name override the way `PostgresStore` does for
+`history`/`tournaments`. Each test creates its own account with a random
+email, touches only its own rows, and a dedicated cleanup suite asserts the
+three tables are back to their pre-suite counts afterward.
 
 The domain tests deliberately favour assertions that are **provable by hand**
 over published percentages: a player holding the nut straight flush on a
@@ -450,7 +531,8 @@ They also lock down the two places poker evaluators usually break:
 - a **flush plus an off-suit straight**, which is a flush, not a straight flush.
 
 API tests boot the real Express app on an ephemeral port and drive it with
-`fetch`; store tests run against `fs.mkdtemp` directories and never touch `data/`.
+`fetch`; most store tests run against `fs.mkdtemp` directories or a throwaway
+Postgres schema and never touch real data.
 
 ## Configuration
 
@@ -460,23 +542,31 @@ API tests boot the real Express app on an ephemeral port and drive it with
 | `HOST` | `0.0.0.0` | Bind address |
 | `NODE_ENV` | `development` | Controls error verbosity and log format |
 | `DATA_DIR` | `./data` | Where the JSON store lives (`json` driver only) |
-| `STORE_DRIVER` | `postgres` | `postgres` or `json` |
+| `STORE_DRIVER` | `postgres` | `postgres` or `json` -- see "Quick start" for why `json` no longer boots the app |
 | `DATABASE_URL` | `postgres://pokerlab:pokerlab_dev@localhost:5432/pokerlab` | Connection string |
+| `SESSION_SECRET` | a dev-only literal | Signs the session cookie; **the server refuses to boot without a real value in production** |
+| `SESSION_TTL_MS` | 30 days, in ms | How long a session lasts before logging in again is required |
 | `MAX_HISTORY_RECORDS` | `500` | Retention cap; oldest evicted first |
+| `WRITE_DEBOUNCE_MS` | `50` | How long `JsonFileStore` batches writes before flushing to disk |
 | `LOG_FORMAT` | `dev` / `combined` | morgan format |
 
 ## Tech stack
 
 **Backend** — Node 20+, Express 4, ES modules throughout.
 **Frontend** — React 18 (UMD via CDN), native ES modules, no build step.
-**Data** — Postgres (JSONB) or a JSON file store, behind one swappable interface.
+**Data** — Postgres, required. `history` and `tournaments` sit behind one
+swappable interface (a JSON file store or Postgres); accounts, sessions, and
+hands are Postgres-only, with real columns and foreign keys where ownership
+needs enforcing.
 **Testing** — `node:test` and `node:assert`.
 
 Dependencies are kept deliberately minimal: four runtime packages
 (`express`, `morgan`, `cookie-parser`, `pg`) and zero dev dependencies — no
-ORM and no query builder; the store writes its own SQL. The frontend
-uses `React.createElement` rather than JSX so it runs in the browser untouched;
-see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
+ORM and no query builder; the store writes its own SQL, and passwords are
+hashed with Node's own `crypto.scrypt` rather than pulling in `bcrypt`. The
+frontend uses `React.createElement` rather than JSX so it runs in the browser
+untouched; see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be
+revisited.
 
 ## Roadmap
 
@@ -486,14 +576,19 @@ see [CLAUDE.md](CLAUDE.md) for when that tradeoff should be revisited.
 - [x] Range explorer — range-vs-hand and range-vs-range equity via sampling
 - [x] Range notation import/export and a Chen-formula "top X%" slider
 - [x] Tournament manager — registration, buy-ins/rebuys/add-ons, a live blind clock, payouts
-- [x] Hand logger — recreate a hand, log the betting, replay it from a shared link
+- [x] Hand logger — recreate a hand, log the betting, replay it action by action
 - [x] Live equity on an all-in run-out, priced by the calculator's own engine
+- [x] Database-backed store — Postgres behind the same `DataStore` interface
+- [x] Accounts — signup/login/logout, signed session cookies, `scrypt` password hashing
+- [x] Hand ownership and revocable sharing — a hand is private by default; a
+      share token, not the hand's own id, is what anyone else can see
+- [x] Optional tournament ownership — no login required to use it, but a
+      tournament created while logged in remembers whose it is
 - [ ] **Hand simulator** — deal and play out configurable spots from a seeded deck
 - [ ] **Session tracker** — aggregate stored results into trends over time
 - [ ] Tournament seating/table balancing
 - [ ] CI pipeline (GitHub Actions) with test runs and build artifacts
 - [ ] Hand-log extras — equity at every decision, replayer autoplay, hand-history import
-- [x] Database-backed store — Postgres behind the same `DataStore` interface
 
 ## Notes
 
