@@ -649,6 +649,167 @@ describe('/api/tournaments', () => {
   });
 });
 
+// Optional ownership needs real accounts, so -- like `/api/hands` below --
+// this block needs a live database even though tournaments themselves are
+// still JSON-file-backed (see the `before` hook at the top of this file).
+// Self-contained rather than sharing `/api/hands`'s `createdUserIds`/
+// `handTablesBaseline`: this block has its own accounts to create and clean
+// up, and there is no reason for its bookkeeping to depend on another
+// block's hooks firing in a particular order.
+/** @type {{users: number, sessions: number, hands: number}} shared with the cleanup block below */
+let tournamentOwnershipBaseline;
+
+describe('/api/tournaments ownership', { skip: dbSkip }, () => {
+  /** @type {string[]} */
+  const ownerUserIds = [];
+
+  before(async () => {
+    tournamentOwnershipBaseline = await tableCounts();
+  });
+
+  after(async () => {
+    if (ownerUserIds.length === 0) return;
+    await getPool().query('DELETE FROM users WHERE id = ANY($1::uuid[])', [ownerUserIds]);
+  });
+
+  /**
+   * Sign up a fresh account and return a browser already holding its
+   * session. A new email every time, so tests never collide over the unique
+   * index.
+   * @returns {Promise<{agent: (pathname: string, options?: RequestInit) => Promise<{status: number, body: any}>, user: object}>}
+   */
+  async function signUpAndLogIn() {
+    const agent = browser();
+    const { status, body } = await agent('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: `${randomUUID()}@example.test`,
+        password: 'a-fine-password',
+        displayName: 'Tournament Owner'
+      })
+    });
+
+    assert.equal(status, 201, `signup failed: ${JSON.stringify(body)}`);
+    ownerUserIds.push(body.user.id);
+    return { agent, user: body.user };
+  }
+
+  it('an anonymous tournament can still be mutated by a logged-in caller, exactly as by an anonymous one', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Nobody owns this' }) });
+    assert.equal(created.status, 201);
+    const id = created.body.id;
+
+    const { agent } = await signUpAndLogIn();
+
+    const renamed = await agent(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed by a stranger' }) });
+    assert.equal(renamed.status, 200, 'a logged-in caller is still just anyone, as far as an ownerless tournament is concerned');
+    assert.equal(renamed.body.name, 'Renamed by a stranger');
+
+    const registered = await agent(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Alice' }) });
+    assert.equal(registered.status, 201);
+  });
+
+  it('an owned tournament reports 404 on every mutating verb for a different caller, but the owner can still act', async () => {
+    const owner = await signUpAndLogIn();
+    const stranger = await signUpAndLogIn();
+
+    const created = await owner.agent('/api/tournaments', {
+      method: 'POST',
+      body: JSON.stringify({ name: "Owner's game" })
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.id;
+
+    const registered = await owner.agent(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Bob' }) });
+    assert.equal(registered.status, 201);
+    const playerId = registered.body.players[0].id;
+
+    // Every mutating verb, attempted by someone who isn't the owner. None of
+    // these should have changed anything -- `#assertMutable` throws before
+    // any of the actual business logic runs -- so they can all target the
+    // same still-`setup` tournament without needing to be replayed.
+    const strangerAttempts = [
+      () => stranger.agent(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Hijacked' }) }),
+      () => stranger.agent(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Intruder' }) }),
+      () => stranger.agent(`/api/tournaments/${id}/players/${playerId}`, { method: 'PATCH', body: JSON.stringify({ action: 'rebuy' }) }),
+      () => stranger.agent(`/api/tournaments/${id}/players/${playerId}`, { method: 'DELETE' }),
+      () => stranger.agent(`/api/tournaments/${id}/registration`, { method: 'PATCH', body: JSON.stringify({ action: 'close' }) }),
+      () => stranger.agent(`/api/tournaments/${id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) }),
+      () => stranger.agent(`/api/tournaments/${id}/reset`, { method: 'POST' }),
+      () => stranger.agent(`/api/tournaments/${id}`, { method: 'DELETE' })
+    ];
+
+    for (const attempt of strangerAttempts) {
+      const { status, body } = await attempt();
+      assert.equal(status, 404, `expected 404, got ${status}: ${JSON.stringify(body)}`);
+    }
+
+    // The tournament is untouched -- still there, still `setup`, still with
+    // its one player -- confirming none of the above actually landed.
+    const stillThere = await owner.agent(`/api/tournaments/${id}`);
+    assert.equal(stillThere.status, 200);
+    assert.equal(stillThere.body.status, 'setup');
+    assert.equal(stillThere.body.players.length, 1);
+
+    // The owner performs the exact same actions the stranger was refused,
+    // in an order that respects each one's own state-machine rules -- proving
+    // ownership-gating doesn't accidentally block the one caller it should let through.
+    assert.equal((await owner.agent(`/api/tournaments/${id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed by the owner' }) })).status, 200);
+
+    const secondPlayer = await owner.agent(`/api/tournaments/${id}/players`, { method: 'POST', body: JSON.stringify({ name: 'Carol' }) });
+    assert.equal(secondPlayer.status, 201);
+    assert.equal((await owner.agent(`/api/tournaments/${id}/players/${secondPlayer.body.players[1].id}`, { method: 'DELETE' })).status, 200);
+
+    assert.equal((await owner.agent(`/api/tournaments/${id}/registration`, { method: 'PATCH', body: JSON.stringify({ action: 'close' }) })).status, 200);
+    assert.equal((await owner.agent(`/api/tournaments/${id}/clock`, { method: 'PATCH', body: JSON.stringify({ action: 'start' }) })).status, 200);
+    assert.equal((await owner.agent(`/api/tournaments/${id}/players/${playerId}`, { method: 'PATCH', body: JSON.stringify({ action: 'rebuy' }) })).status, 200);
+    assert.equal((await owner.agent(`/api/tournaments/${id}/reset`, { method: 'POST' })).status, 200);
+    assert.equal((await owner.agent(`/api/tournaments/${id}`, { method: 'DELETE' })).status, 204);
+  });
+
+  it('reads are never gated, regardless of ownership', async () => {
+    const owner = await signUpAndLogIn();
+    const stranger = await signUpAndLogIn();
+
+    const created = await owner.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "Owner's readable game" }) });
+    const id = created.body.id;
+
+    assert.equal((await api(`/api/tournaments/${id}`)).status, 200, 'an anonymous caller can still read an owned tournament');
+    assert.equal((await stranger.agent(`/api/tournaments/${id}`)).status, 200, 'so can a different logged-in caller');
+    assert.equal((await api('/api/tournaments')).status, 200, 'and the list is never gated either');
+  });
+
+  it('mine=true scopes the list to the caller\'s own tournaments; omitted or false returns everything', async () => {
+    const userA = await signUpAndLogIn();
+    const userB = await signUpAndLogIn();
+
+    const aGame = (await userA.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "A's game" }) })).body;
+    const bGame = (await userB.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "B's game" }) })).body;
+
+    const mineForA = await userA.agent('/api/tournaments?mine=true');
+    assert.equal(mineForA.status, 200);
+    assert.ok(mineForA.body.items.some(t => t.id === aGame.id), "A's own tournament is in A's mine=true list");
+    assert.ok(!mineForA.body.items.some(t => t.id === bGame.id), "B's tournament is not in A's mine=true list");
+
+    const unfilteredForA = await userA.agent('/api/tournaments');
+    assert.ok(unfilteredForA.body.items.some(t => t.id === aGame.id), 'unfiltered still includes the caller\'s own');
+    assert.ok(unfilteredForA.body.items.some(t => t.id === bGame.id), 'and everyone else\'s, owned or not');
+
+    // No session at all: `mine=true` has no `userId` to scope to, so it is a
+    // no-op rather than an error or an empty page.
+    const anonymousMine = await api('/api/tournaments?mine=true');
+    assert.equal(anonymousMine.status, 200);
+    assert.ok(anonymousMine.body.items.some(t => t.id === aGame.id));
+    assert.ok(anonymousMine.body.items.some(t => t.id === bGame.id));
+  });
+});
+
+describe('/api/tournaments ownership cleanup', { skip: dbSkip }, () => {
+  it('leaves no rows behind in the real tables', async () => {
+    assert.deepEqual(await tableCounts(), tournamentOwnershipBaseline);
+  });
+});
+
 // The one block in this suite that writes to the real `users`/`sessions`/
 // `hands` tables rather than a temp directory or a throwaway table: unlike
 // `PostgresStore`, none of the three repositories it exercises take a table

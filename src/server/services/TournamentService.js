@@ -34,9 +34,12 @@ export class TournamentService {
 
   /**
    * @param {object} payload
+   * @param {string|undefined} userId stamped as the owner if present; a
+   *   tournament created with no session stays ownerless, exactly as every
+   *   tournament was before accounts existed
    * @returns {Promise<object>} the created tournament, decorated
    */
-  async create(payload) {
+  async create(payload, userId) {
     const { valid, errors, value } = validateCreateTournamentRequest(payload);
     if (!valid) throw ApiError.badRequest('The tournament settings are invalid.', errors);
 
@@ -45,15 +48,26 @@ export class TournamentService {
     // repository keeps auto-suggesting a split off the field size as players
     // register until the organizer explicitly sets one themselves.
     const payoutSplitCustomized = payload.payoutSplit !== undefined;
-    return this.#decorate(await this.repository.create({ ...value, payoutSplitCustomized }));
+    // `userId` is ownership metadata, not a tournament setting, so it's
+    // merged in after validation rather than run through
+    // `validateCreateTournamentRequest` alongside the domain fields it
+    // actually checks.
+    return this.#decorate(
+      await this.repository.create({ ...value, payoutSplitCustomized, userId: userId || null })
+    );
   }
 
   /**
-   * @param {{limit?: number, offset?: number}} query
+   * @param {{limit?: number, offset?: number, mine?: boolean}} query
+   * @param {string|undefined} userId
    * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
    */
-  async list(query) {
-    const page = await this.repository.list(query);
+  async list({ limit, offset, mine } = {}, userId) {
+    // `mine` with no session is a no-op filter, not an error -- there is
+    // nothing to scope to, so the request just gets the same unfiltered page
+    // anyone else would.
+    const where = mine && userId ? { userId } : undefined;
+    const page = await this.repository.list({ limit, offset, where });
     return { ...page, items: page.items.map(tournament => this.#summarize(tournament)) };
   }
 
@@ -65,10 +79,12 @@ export class TournamentService {
   /**
    * @param {string} id
    * @param {object} payload
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async updateSettings(id, payload) {
+  async updateSettings(id, payload, userId) {
     const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
 
     // Full settings (name, stacks, blinds, an early payout guess) are only safe
     // to change before the tournament starts. The payout split is the one
@@ -95,19 +111,26 @@ export class TournamentService {
     return this.#decorate(await this.repository.updateSettings(id, { ...value, payoutSplitCustomized }));
   }
 
-  /** @param {string} id @returns {Promise<boolean>} */
-  async remove(id) {
-    await this.#require(id);
+  /**
+   * @param {string} id
+   * @param {string|undefined} userId
+   * @returns {Promise<boolean>}
+   */
+  async remove(id, userId) {
+    const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
     return this.repository.remove(id);
   }
 
   /**
    * @param {string} id
    * @param {object} payload
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async registerPlayer(id, payload) {
+  async registerPlayer(id, payload, userId) {
     const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
     if (!tournament.registrationOpen) {
       throw ApiError.unprocessable('Registration is closed for this tournament.');
     }
@@ -124,10 +147,12 @@ export class TournamentService {
    * the comment there.
    * @param {string} id
    * @param {{action: string}} payload
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async updateRegistration(id, { action } = {}) {
+  async updateRegistration(id, { action } = {}, userId) {
     const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
 
     if (!REGISTRATION_ACTIONS.includes(action)) {
       throw ApiError.badRequest(`Unknown registration action: ${JSON.stringify(action)}`, [
@@ -153,10 +178,12 @@ export class TournamentService {
   /**
    * @param {string} id
    * @param {string} playerId
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async removePlayer(id, playerId) {
+  async removePlayer(id, playerId, userId) {
     const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
     if (tournament.status !== 'setup') {
       throw ApiError.unprocessable('A player can only be removed before the tournament starts; eliminate them instead.');
     }
@@ -169,10 +196,12 @@ export class TournamentService {
    * @param {string} id
    * @param {string} playerId
    * @param {{action: string}} payload
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async updatePlayer(id, playerId, { action } = {}) {
+  async updatePlayer(id, playerId, { action } = {}, userId) {
     const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
     const player = this.#requirePlayer(tournament, playerId);
 
     if (!PLAYER_ACTIONS.includes(action)) {
@@ -200,10 +229,12 @@ export class TournamentService {
   /**
    * @param {string} id
    * @param {{action: string, levelIndex?: number}} payload
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async updateClock(id, { action, levelIndex } = {}) {
+  async updateClock(id, { action, levelIndex } = {}, userId) {
     const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
 
     if (!CLOCK_ACTIONS.includes(action)) {
       throw ApiError.badRequest(`Unknown clock action: ${JSON.stringify(action)}`, [
@@ -237,10 +268,12 @@ export class TournamentService {
    * eliminations/rebuys/add-ons cleared, roster kept. Works regardless of
    * the tournament's current status.
    * @param {string} id
+   * @param {string|undefined} userId
    * @returns {Promise<object>}
    */
-  async reset(id) {
-    await this.#require(id);
+  async reset(id, userId) {
+    const tournament = await this.#require(id);
+    this.#assertMutable(tournament, userId);
     return this.#decorate(await this.repository.resetProgress(id));
   }
 
@@ -252,6 +285,29 @@ export class TournamentService {
     const tournament = await this.repository.findById(id);
     if (!tournament) throw ApiError.notFound('Tournament not found');
     return tournament;
+  }
+
+  /**
+   * A tournament with no owner is open to anyone, matching the app's
+   * behavior before accounts existed. One with an owner can only be touched
+   * by that owner -- checked here, once, rather than in each mutating
+   * method separately.
+   *
+   * This is a read-then-check, not an atomic SQL condition the way hands
+   * enforce ownership (`WHERE id = $1 AND user_id = $2` in one statement).
+   * That's a deliberate, smaller-stakes trade-off for a shared clock/roster
+   * tool, not an oversight -- see CLAUDE.md's Tournament domain section for
+   * the reasoning. A tournament reopening a brief ownership-check race is a
+   * different risk profile than a private hand record doing the same.
+   *
+   * @param {object} tournament
+   * @param {string|undefined} userId
+   * @throws {ApiError} 404 if the tournament has an owner and it isn't this caller
+   */
+  #assertMutable(tournament, userId) {
+    if (tournament.userId && tournament.userId !== userId) {
+      throw ApiError.notFound('Tournament not found');
+    }
   }
 
   /**

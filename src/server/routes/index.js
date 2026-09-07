@@ -25,6 +25,7 @@ import { createTournamentRouter } from './tournamentRoutes.js';
  *   authService: import('../services/AuthService.js').AuthService,
  *   sessionsRepository: import('../store/SessionsRepository.js').SessionsRepository,
  *   requireAuth: import('express').RequestHandler,
+ *   optionalAuth: import('express').RequestHandler,
  *   historyRepository: import('../store/HistoryRepository.js').HistoryRepository
  * }} deps
  * @returns {import('express').Router}
@@ -37,6 +38,7 @@ export function createApiRouter({
   authService,
   sessionsRepository,
   requireAuth,
+  optionalAuth,
   historyRepository
 }) {
   const router = Router();
@@ -49,7 +51,7 @@ export function createApiRouter({
   router.use('/auth', createAuthRouter({ authService, sessionsRepository }));
   router.use('/equity', createEquityRouter({ equityService }));
   router.use('/ranges', createRangeRouter({ rangeService }));
-  router.use('/tournaments', createTournamentRouter({ tournamentService }));
+  router.use('/tournaments', createTournamentRouter({ tournamentService, optionalAuth }));
   router.use('/hands', createHandLogRouter({ handLogService, requireAuth }));
   // Mounted at its own path, not as an exception carved out of /hands -- see
   // the header comment in sharedHandRoutes.js for why that separation matters.

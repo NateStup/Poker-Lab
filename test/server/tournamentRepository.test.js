@@ -254,4 +254,34 @@ describe('TournamentRepository', () => {
       assert.deepEqual(tournament.payoutSplit, [50, 30, 20]);
     });
   });
+
+  describe('list', () => {
+    // `create` accepts whatever settings it's handed and stores them as-is
+    // (it's a thin wrapper over `store.insert`), so a field the validator
+    // never checks -- `userId`, ownership metadata rather than a tournament
+    // setting -- survives a round trip through it exactly like any other.
+    // Filtering by it here proves both that and that `list`'s `where` option
+    // actually reaches the store, rather than being silently dropped the way
+    // it was before this parameter existed.
+    it('forwards a where filter to the store', async () => {
+      const owned = await repository.create({ ...baseSettings(), name: 'Owned by A', userId: 'user-a' });
+      await repository.create({ ...baseSettings(), name: 'Owned by B', userId: 'user-b' });
+      await repository.create({ ...baseSettings(), name: 'Ownerless', userId: null });
+
+      const page = await repository.list({ where: { userId: 'user-a' } });
+
+      assert.equal(page.total, 1);
+      assert.equal(page.items.length, 1);
+      assert.equal(page.items[0].id, owned.id);
+    });
+
+    it('returns every tournament when no where filter is given', async () => {
+      await repository.create({ ...baseSettings(), name: 'Owned', userId: 'user-a' });
+      await repository.create({ ...baseSettings(), name: 'Ownerless', userId: null });
+
+      const page = await repository.list();
+
+      assert.ok(page.total >= 2, 'unfiltered still returns owned and ownerless tournaments alike');
+    });
+  });
 });

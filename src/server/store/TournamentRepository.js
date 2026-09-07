@@ -73,11 +73,13 @@ export class TournamentRepository {
   }
 
   /**
-   * @param {{limit?: number, offset?: number}} [query]
+   * @param {{limit?: number, offset?: number, where?: Record<string, unknown>}} [query]
+   *   `where` is forwarded to the store as-is -- see `DataStore#list` for the
+   *   equality-filter shape it accepts
    * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
    */
-  async list({ limit = 50, offset = 0 } = {}) {
-    return this.store.list({ limit, offset });
+  async list({ limit = 50, offset = 0, where } = {}) {
+    return this.store.list({ limit, offset, where });
   }
 
   /** @param {string} id @returns {Promise<object|null>} */
