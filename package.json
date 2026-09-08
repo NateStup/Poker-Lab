@@ -15,7 +15,8 @@
     "test:watch": "node --test --watch",
     "test:coverage": "node --test --experimental-test-coverage",
     "db:migrate": "node src/server/store/migrate.js",
-    "db:up": "docker compose up -d postgres"
+    "db:up": "docker compose up -d postgres",
+    "vercel-build": "node scripts/copy-shared-for-vercel.js"
   },
   "keywords": [
     "poker",
