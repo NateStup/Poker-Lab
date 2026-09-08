@@ -1,30 +1,30 @@
 /**
  * Vercel's entry point -- not the one used for local development.
  *
- * Vercel's zero-config Express hosting looks for a file at one of a fixed
- * set of conventional paths (app.js, index.js, or server.js, at the project
- * root or directly under src/) exporting the Express app as a default
- * export. This project's real entry point, src/server/server.js, sits one
- * folder deeper than any of those -- so it was never going to be found, and
- * this file exists purely to give Vercel something at a path it actually
- * checks. `npm start` / `npm run dev` are completely untouched by this file
- * and keep using src/server/server.js exactly as they always have.
+ * Vercel's zero-config Express hosting recognizes two patterns: a default
+ * export of the app itself, or a call to app.listen(). The first version of
+ * this file used the default-export pattern with a top-level await
+ * (`const app = await createApp(); export default app;`) -- and the
+ * deployed function was never built at all: the deployment succeeded, but
+ * showed zero invocations for every request, meaning detection itself
+ * silently failed rather than the app failing to run once deployed.
  *
- * createApp() already returns a fully-assembled app with no port bound --
- * that split (assembly here, binding a port in server.js) was made for
- * testability, so api.test.js could boot the real app against an ephemeral
- * port. It turns out to be exactly what a serverless host wants too:
- * something already built, with nothing left to do but hand it requests.
+ * Top-level await is a documented rough edge in more than one JS-framework
+ * Vercel integration (Astro's Vercel adapter has hit a hard build error over
+ * it; SvelteKit's adapter avoids it specifically because of a Vercel
+ * incompatibility) -- not proof this exact detection path has the same
+ * issue, but the best available lead, and worth removing regardless since
+ * `export default` has no way to express "wait for this async value" other
+ * than await at module scope. `app.listen()` doesn't have that constraint --
+ * it's just a method call, and a method call can live inside a `.then()`
+ * with no top-level await anywhere in the file.
  *
- * Top-level await is what lets this stay a plain default export rather than
- * a promise Vercel would have to know to unwrap -- the async work (building
- * every repository) happens once, when this module is first loaded, and
- * Fluid compute's warm reuse means that's the common case, not "every
- * request."
+ * Nothing about createApp() or its async repository construction changes --
+ * only how this one file waits for it.
  */
 
 import { createApp } from './src/server/app.js';
 
-const app = await createApp();
-
-export default app;
+createApp().then(app => {
+  app.listen(process.env.PORT || 3000);
+});
