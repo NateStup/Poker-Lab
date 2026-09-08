@@ -19,5 +19,6 @@ npm-debug.log*
 .env.local
 coverage/
 .handoff/
+public/shared/
 pokerlab-snapshot.md
 pokerlab-tree.txt

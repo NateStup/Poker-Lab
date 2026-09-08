@@ -20,11 +20,11 @@
     <!--
       React is loaded as a UMD global rather than bundled, which keeps the
       project buildless: `main.js` and the shared domain modules are served
-      straight to the browser as native ES modules. Swap to the production
-      builds (react.production.min.js) before deploying.
+      straight to the browser as native ES modules. These are the production
+      builds (react.production.min.js).
     -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script type="module" src="/javascripts/poker/main.js"></script>
   </body>
 </html>

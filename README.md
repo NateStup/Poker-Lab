@@ -592,6 +592,8 @@ revisited.
 
 ## Notes
 
-The CDN currently serves React's **development** builds, which are larger and
-slower. Switch to `react.production.min.js` in
-[public/index.html](public/index.html) before any real deployment.
+The CDN in [public/index.html](public/index.html) now serves React's
+**production** builds. Local prep for deploying to Vercel (with Postgres on
+Neon) is in place — a root `server.js` entry point and a
+`vercel-build` step that copies `src/shared/` into `public/shared/` — but the
+app has not actually been deployed yet.
