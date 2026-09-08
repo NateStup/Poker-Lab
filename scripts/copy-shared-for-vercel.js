@@ -13,10 +13,15 @@
  * bundled; the files that land in public/shared/ are byte-identical to
  * src/shared/.
  *
- * public/shared/ is gitignored -- it's fully derived from src/shared/ on
- * every deploy, so committing it would just be a second copy to keep in
- * sync by hand, the exact kind of drift this project has spent a lot of
- * effort catching elsewhere.
+ * public/shared/ is committed -- it's the real copy Vercel serves in
+ * production. A generated file Vercel's own build produces under public/
+ * isn't reliably included in what it actually serves, so this script's
+ * output can't be left to build time alone. It still runs as part of
+ * `vercel-build` too, as a defensive re-sync in case the committed copy is
+ * ever stale, but committing it is what actually makes /shared/*.js
+ * reachable in production. Re-run this manually after any change to
+ * src/shared/ and commit the result; test/publicSharedSync.test.js fails
+ * loudly if that step is forgotten.
  */
 
 import { cp, rm } from 'node:fs/promises';
