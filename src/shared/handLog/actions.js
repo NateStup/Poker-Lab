@@ -241,6 +241,13 @@ export function computeHandDerived(hand) {
  * `commitIncrement`, which is what keeps the amount the editor suggests equal
  * to the amount the saved hand will report.
  *
+ * That same walk is also the natural place to answer "has this seat acted
+ * since the last bet or raise on this street" -- `nextToAct` needs exactly
+ * that to know whether a round is closed, and computing it here means one
+ * pass over the action list rather than a second one duplicating this one.
+ * A bet or raise resets everyone's flag (their turn has been reopened); every
+ * other action (including a fold) only sets the acting seat's own flag.
+ *
  * @param {object} hand a hand record, possibly still being edited
  * @param {string} street which street to stop on
  * @param {number} [actionCount] apply only this many of that street's actions
@@ -248,8 +255,10 @@ export function computeHandDerived(hand) {
  *   face" passes the count it has so far
  * @returns {{
  *   committed: number[], contributed: number[], stacks: number[],
- *   folded: boolean[], allIn: boolean[], highestBet: number, pot: number
- * }} `committed` is per seat on this street; `contributed` is across the hand
+ *   folded: boolean[], allIn: boolean[], actedSinceLastAggression: boolean[],
+ *   highestBet: number, pot: number
+ * }} `committed` and `actedSinceLastAggression` are per seat on this street;
+ *   `contributed` is across the hand
  */
 export function streetBettingState(hand, street, actionCount = Infinity) {
   const { seats, buttonSeat, format, streets } = hand;
@@ -258,12 +267,14 @@ export function streetBettingState(hand, street, actionCount = Infinity) {
   const contributed = new Array(seatCount).fill(0);
   const folded = new Array(seatCount).fill(false);
   let committed = new Array(seatCount).fill(0);
+  let actedSinceLastAggression = new Array(seatCount).fill(false);
   let pot = 0;
 
   for (const name of STREET_NAMES) {
     // Each street starts with a clean slate in front of the seats; only
     // preflop opens with money already out.
     committed = new Array(seatCount).fill(0);
+    actedSinceLastAggression = new Array(seatCount).fill(false);
 
     if (name === 'preflop') {
       for (const bet of deriveForcedBets({ seats, buttonSeat, format })) {
@@ -284,6 +295,14 @@ export function streetBettingState(hand, street, actionCount = Infinity) {
 
     for (const action of actions) {
       const seat = action.seatNumber;
+
+      // A bet or raise reopens the action -- everyone else is owed a turn
+      // again, regardless of having already matched the previous bet.
+      if (action.type === 'bet' || action.type === 'raise') {
+        actedSinceLastAggression.fill(false);
+      }
+      actedSinceLastAggression[seat] = true;
+
       if (action.type === 'fold') {
         folded[seat] = true;
         continue;
@@ -307,6 +326,7 @@ export function streetBettingState(hand, street, actionCount = Infinity) {
     stacks,
     folded,
     allIn: stacks.map((stack, index) => stack <= 0 && contributed[index] > 0),
+    actedSinceLastAggression,
     highestBet: Math.max(0, ...committed),
     pot
   };
@@ -314,7 +334,18 @@ export function streetBettingState(hand, street, actionCount = Infinity) {
 
 /**
  * The seat the editor should offer next: the first one after the last actor
- * that is still in the hand and still has chips.
+ * that is still live, still has chips, and hasn't yet acted since the last
+ * bet or raise on this street (or, if there's been none, hasn't acted at
+ * all this street).
+ *
+ * That last condition is what makes this closure-aware rather than just
+ * "next warm body": a seat whose `committed` already equals `highestBet` --
+ * the big blind preflop, sitting at the current bet from having posted it --
+ * still needs its turn, because matching the number isn't the same as having
+ * acted. Once every live, non-all-in seat has acted since the last
+ * aggression, nobody is owed a turn and the round is closed; that subsumes
+ * "everyone folded or all in" as the trivial case where there is nobody left
+ * to check the condition against.
  *
  * A default, not a rule -- the seat picker stays free, because a hand
  * reconstructed from memory is often logged with only the actions that
@@ -324,7 +355,8 @@ export function streetBettingState(hand, street, actionCount = Infinity) {
  * @param {string} street
  * @param {number} [actionCount] how many of the street's actions have been
  *   logged so far
- * @returns {number|null} null when nobody can act (everyone is folded or all in)
+ * @returns {number|null} null when the round is closed -- nobody live and
+ *   non-all-in still owes a turn since the last bet or raise
  */
 export function nextToAct(hand, street, actionCount = Infinity) {
   const { seats, buttonSeat, streets } = hand;
@@ -337,7 +369,7 @@ export function nextToAct(hand, street, actionCount = Infinity) {
 
   for (let step = 0; step < order.length; step += 1) {
     const seat = order[(startAt + step) % order.length];
-    if (!state.folded[seat] && !state.allIn[seat]) return seat;
+    if (!state.folded[seat] && !state.allIn[seat] && !state.actedSinceLastAggression[seat]) return seat;
   }
   return null;
 }
