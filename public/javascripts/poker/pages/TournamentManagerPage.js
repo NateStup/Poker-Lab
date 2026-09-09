@@ -21,7 +21,7 @@
 import { activePlayerCount, computeClockState, generateBlindStructure, suggestPayoutSplit } from '/shared/tournament/index.js';
 import { BackButton } from '../components/BackButton.js';
 import { useAuth } from '../context/AuthContext.js';
-import { navigate, useRoute } from '../router.js';
+import { navigate, useRoute, useSearchParam } from '../router.js';
 import { TournamentClock } from '../components/TournamentClock.js';
 import { TournamentPayouts } from '../components/TournamentPayouts.js';
 import { TournamentRoster } from '../components/TournamentRoster.js';
@@ -268,6 +268,7 @@ function TournamentListView({
 export function TournamentManagerPage() {
   const { status: authStatus, user } = useAuth();
   const path = useRoute();
+  const resumeId = useSearchParam('resume');
   const [tournaments, setTournaments] = React.useState([]);
   const [isLoadingList, setIsLoadingList] = React.useState(true);
   const [listError, setListError] = React.useState(null);
@@ -280,20 +281,16 @@ export function TournamentManagerPage() {
   const advancingRef = React.useRef(false);
   const lastLevelRef = React.useRef(null);
 
-  // Logged in, the server's own list is the caller's owned tournaments. But
-  // a tournament this browser remembers creating anonymously (see
-  // `listRememberedTournaments`) doesn't stop being reachable just because
-  // its creator later logged in elsewhere in the flow -- `handleSave`'s
-  // redirect to `/login?next=/tournament` lands back here with no memory of
-  // which tournament sent it there, and that tournament still has no owner
-  // (nothing has clicked Save yet), so it would otherwise be unreachable
-  // through this page ever again. Every remembered id is fetched
-  // individually either way (`GET /api/tournaments/:id` stays open to
-  // anyone for an unowned tournament) and merged in when it's still unowned
-  // and the server list doesn't already cover it -- if it does (this account
-  // already owns it) or fetching it now 404s (deleted, or claimed by a
-  // different account), it's dropped rather than duplicated or retried
-  // forever.
+  // Logged in, the list shown is exactly and only what `GET
+  // /api/tournaments` returns -- no local history merged in. `localStorage`
+  // is scoped to this *browser*, not to whoever happens to be logged in, so
+  // merging it into an authenticated list would leak any tournament ever
+  // created anonymously on this machine into whichever account is currently
+  // signed in, regardless of whether it's actually theirs. Logged out, there
+  // is no server list to ask at all (`GET /` requires a session now), so
+  // this is the one place `listRememberedTournaments()` still belongs --
+  // finding your own anonymous tournament again after a reload, with no
+  // account involved at all.
   const refreshList = React.useCallback(async () => {
     // Wait for the initial auth check rather than guessing: fetching the
     // real list and then discarding it a moment later (or the reverse) would
@@ -302,17 +299,15 @@ export function TournamentManagerPage() {
 
     setIsLoadingList(true);
     try {
-      const rememberedIds = listRememberedTournaments();
-      const remembered = (await Promise.all(rememberedIds.map(id => fetchTournament(id).catch(err => {
-        if (err.status === 404) forgetTournament(id);
-        return null;
-      })))).filter(Boolean);
-
       if (authStatus === 'authenticated') {
         const page = await fetchTournaments({ limit: 50 });
-        const stillUnowned = remembered.filter(t => !t.userId && !page.items.some(item => item.id === t.id));
-        setTournaments([...page.items, ...stillUnowned.map(summarizeForList)]);
+        setTournaments(page.items);
       } else {
+        const rememberedIds = listRememberedTournaments();
+        const remembered = (await Promise.all(rememberedIds.map(id => fetchTournament(id).catch(err => {
+          if (err.status === 404) forgetTournament(id);
+          return null;
+        })))).filter(Boolean);
         setTournaments(remembered.map(summarizeForList));
       }
       setListError(null);
@@ -326,6 +321,33 @@ export function TournamentManagerPage() {
   React.useEffect(() => {
     refreshList();
   }, [refreshList]);
+
+  // Coming back from the login redirect `handleSave` sends an anonymous
+  // caller through: `?resume=<id>` exists for exactly one reason, so once a
+  // session is actually available this finishes what clicking Save started
+  // -- claiming it -- rather than just redisplaying it and leaving a second,
+  // now-redundant click for the user to make. Never by touching the list or
+  // local history either way, which is the whole point of carrying the id
+  // itself instead of falling back to scanning everything this browser
+  // remembers.
+  //
+  // A direct or repeat visit to this same URL is handled without erroring:
+  // already-saved-by-this-account (422) or claimed-by-someone-else (404)
+  // both fall back to a plain read, so the page still lands on the
+  // tournament -- or on whatever it can actually show -- rather than
+  // surfacing a failed save as if the whole thing broke.
+  React.useEffect(() => {
+    if (!resumeId || authStatus === 'loading') return;
+
+    const load = authStatus === 'authenticated'
+      ? saveTournament(resumeId).catch(err => {
+          if (err.status === 404 || err.status === 422) return fetchTournament(resumeId);
+          throw err;
+        })
+      : fetchTournament(resumeId);
+
+    load.then(setTournament).catch(err => setListError(err.message));
+  }, [resumeId, authStatus]);
 
   // Tick once a second while a tournament is open, purely to force a
   // re-render so the locally-computed countdown keeps moving.
@@ -433,10 +455,20 @@ export function TournamentManagerPage() {
    * redirect `RequireAuth` uses to gate a whole page -- reused here for one
    * button instead, since the Tournament Manager itself stays reachable
    * anonymously and can't be gated the same way a protected page is.
+   *
+   * The plain page path isn't enough on its own: this page has no per-
+   * tournament route to begin with (`path` is always just `/tournament`),
+   * so the redirect target has to carry *which* tournament to come back to
+   * itself, as its own `?resume=<id>` -- `resumeId` below is what reads it
+   * back out once login returns here. That nested query string goes through
+   * `encodeURIComponent` exactly once, same as the plain-path case
+   * `RequireAuth` handles elsewhere; `useSearchParam('next')` on the other
+   * end decodes it back in one step, `?` and all.
    */
   function handleSave() {
     if (authStatus !== 'authenticated') {
-      navigate(`/login?next=${encodeURIComponent(path)}`);
+      const resumePath = `${path}?resume=${encodeURIComponent(tournament.id)}`;
+      navigate(`/login?next=${encodeURIComponent(resumePath)}`);
       return;
     }
     return withErrorHandling(() => saveTournament(tournament.id));
