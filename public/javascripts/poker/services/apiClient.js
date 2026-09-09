@@ -249,15 +249,13 @@ export function createTournament(payload) {
 
 /**
  * Fetch a page of tournaments, newest first (lightweight summaries only).
- * @param {{limit?: number, offset?: number, mine?: boolean}} [query] `mine`
- *   scopes the page to the caller's own tournaments; omitted or `false`
- *   returns every tournament regardless of ownership, exactly as before
- *   accounts existed
+ * Unconditionally the caller's own -- there is no "browse everyone's" mode
+ * any more, and this 401s with no session.
+ * @param {{limit?: number, offset?: number}} [query]
  * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
  */
-export function fetchTournaments({ limit = 20, offset = 0, mine = false } = {}) {
+export function fetchTournaments({ limit = 20, offset = 0 } = {}) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (mine) params.set('mine', 'true');
   return request(`/api/tournaments?${params}`);
 }
 
@@ -289,6 +287,16 @@ export function updateTournamentSettings(id, patch) {
  */
 export function deleteTournament(id) {
   return request(`/api/tournaments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/**
+ * Claim an unowned tournament permanently for the caller. Requires a
+ * session; there is no anonymous or "soft" version of this action.
+ * @param {string} id
+ * @returns {Promise<object>} the tournament, decorated, now carrying a `userId`
+ */
+export function saveTournament(id) {
+  return request(`/api/tournaments/${encodeURIComponent(id)}/save`, { method: 'POST' });
 }
 
 /**
