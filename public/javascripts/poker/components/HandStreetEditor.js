@@ -202,7 +202,7 @@ export function HandStreetEditor({
     // same reason every button here must stay `type="button"`: any button
     // inside a form defaults to submitting it.
     actingSeat === null
-      ? e('p', { className: 'footnote' }, 'Everyone is all in or folded — no more action to log.')
+      ? e('p', { className: 'footnote' }, 'Betting is complete for this street.')
       : e(
           'div',
           { className: 'hand-action-entry' },
