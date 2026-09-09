@@ -24,9 +24,11 @@ function formatClock(ms) {
  * @param {'setup'|'active'|'completed'} props.status tournament status
  * @param {'running'|'paused'} props.clockStatus
  * @param {object} props.liveClock a `computeClockState` result
+ * @param {boolean} props.canEdit whether the caller may control this clock --
+ *   an owned tournament's controls are for its owner alone
  * @param {(action: string) => void} props.onAction
  */
-export function TournamentClock({ status, clockStatus, liveClock, onAction }) {
+export function TournamentClock({ status, clockStatus, liveClock, canEdit, onAction }) {
   const { level, nextLevel, remainingMs, isFinalLevel } = liveClock;
 
   return e(
@@ -40,20 +42,22 @@ export function TournamentClock({ status, clockStatus, liveClock, onAction }) {
       : e('div', { className: 'footnote' }, 'Final level -- no further increases.'),
     status === 'completed'
       ? e('p', { className: 'footnote' }, 'The tournament is complete.')
-      : e(
-          'div',
-          { className: 'tournament-clock-actions' },
-          status === 'setup'
-            ? e('button', { type: 'button', onClick: () => onAction('start') }, 'Start clock')
-            : clockStatus === 'running'
-              ? e('button', { type: 'button', onClick: () => onAction('pause') }, 'Pause')
-              : e('button', { type: 'button', onClick: () => onAction('resume') }, 'Resume'),
-          e('button', {
-            type: 'button',
-            className: 'ghost-button',
-            disabled: status === 'setup' || isFinalLevel,
-            onClick: () => onAction('advance')
-          }, 'Skip to next level')
-        )
+      : !canEdit
+        ? e('p', { className: 'footnote' }, 'View only.')
+        : e(
+            'div',
+            { className: 'tournament-clock-actions' },
+            status === 'setup'
+              ? e('button', { type: 'button', onClick: () => onAction('start') }, 'Start clock')
+              : clockStatus === 'running'
+                ? e('button', { type: 'button', onClick: () => onAction('pause') }, 'Pause')
+                : e('button', { type: 'button', onClick: () => onAction('resume') }, 'Resume'),
+            e('button', {
+              type: 'button',
+              className: 'ghost-button',
+              disabled: status === 'setup' || isFinalLevel,
+              onClick: () => onAction('advance')
+            }, 'Skip to next level')
+          )
   );
 }

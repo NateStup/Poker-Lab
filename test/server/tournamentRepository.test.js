@@ -218,6 +218,16 @@ describe('TournamentRepository', () => {
     });
   });
 
+  describe('claim', () => {
+    it('attaches an owner to a previously unowned tournament', async () => {
+      let tournament = await repository.create(baseSettings());
+      assert.equal(tournament.userId, undefined, 'starts with no owner set at all');
+
+      tournament = await repository.claim(tournament.id, 'user-claiming-a-tournament');
+      assert.equal(tournament.userId, 'user-claiming-a-tournament');
+    });
+  });
+
   describe('resetProgress', () => {
     it('returns to setup, clearing the clock and every player\'s progress, keeping the roster', async () => {
       let tournament = await repository.create(baseSettings());

@@ -410,26 +410,11 @@ describe('/api/tournaments', () => {
     assert.equal(body.error.code, 'BAD_REQUEST');
   });
 
-  it('lists tournaments newest first with summary fields', async () => {
-    const { body } = await api('/api/tournaments');
-    assert.ok(body.total >= 1);
-    assert.ok('playerCount' in body.items[0]);
-    assert.ok(!('players' in body.items[0]), 'the list view should be a lightweight summary');
-  });
-
-  it('summarises which level a tournament is on, not just that it is active', async () => {
-    // A list row saying "active" answers nothing useful -- the question is
-    // always what level and what blinds, so the summary carries the level.
-    const { body } = await api('/api/tournaments');
-    const summary = body.items[0];
-
-    assert.ok(summary.currentLevel, 'the summary carries the current level');
-    assert.equal(typeof summary.currentLevel.level, 'number');
-    assert.equal(typeof summary.currentLevel.smallBlind, 'number');
-    assert.equal(typeof summary.currentLevel.bigBlind, 'number');
-    assert.ok(['running', 'paused'].includes(summary.clockStatus));
-    assert.ok(!('structure' in summary), 'but not the whole blind structure');
-  });
+  // The two "lists tournaments..." tests that used to live here moved to the
+  // `/api/tournaments ownership` block below: `GET /` now requires a
+  // session, and a session needs the Postgres-backed auth system, so
+  // exercising the list at all needs a live database regardless of what it's
+  // actually asserting about the response shape.
 
   it('runs a full lifecycle: register, buy in, start the clock, and eliminate down to a winner', async () => {
     const created = await api('/api/tournaments', {
@@ -725,7 +710,7 @@ describe('/api/tournaments ownership', { skip: dbSkip }, () => {
     const playerId = registered.body.players[0].id;
 
     // Every mutating verb, attempted by someone who isn't the owner. None of
-    // these should have changed anything -- `#assertMutable` throws before
+    // these should have changed anything -- `#assertAccessible` throws before
     // any of the actual business logic runs -- so they can all target the
     // same still-`setup` tournament without needing to be replayed.
     const strangerAttempts = [
@@ -767,40 +752,114 @@ describe('/api/tournaments ownership', { skip: dbSkip }, () => {
     assert.equal((await owner.agent(`/api/tournaments/${id}`, { method: 'DELETE' })).status, 204);
   });
 
-  it('reads are never gated, regardless of ownership', async () => {
+  it('an unowned tournament can still be read by anyone, logged in or not -- unchanged from before', async () => {
+    const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Open to all readers' }) });
+    const id = created.body.id;
+
+    const { agent } = await signUpAndLogIn();
+    assert.equal((await api(`/api/tournaments/${id}`)).status, 200, 'an anonymous caller can read an unowned tournament');
+    assert.equal((await agent(`/api/tournaments/${id}`)).status, 200, 'so can a logged-in caller who has nothing to do with it');
+  });
+
+  it('an owned tournament reports 404 on GET for a different account, and for no session at all -- only the owner gets 200', async () => {
     const owner = await signUpAndLogIn();
     const stranger = await signUpAndLogIn();
 
-    const created = await owner.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "Owner's readable game" }) });
+    const created = await owner.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "Owner's private game" }) });
     const id = created.body.id;
 
-    assert.equal((await api(`/api/tournaments/${id}`)).status, 200, 'an anonymous caller can still read an owned tournament');
-    assert.equal((await stranger.agent(`/api/tournaments/${id}`)).status, 200, 'so can a different logged-in caller');
-    assert.equal((await api('/api/tournaments')).status, 200, 'and the list is never gated either');
+    assert.equal((await owner.agent(`/api/tournaments/${id}`)).status, 200, 'the owner can read it');
+    assert.equal((await stranger.agent(`/api/tournaments/${id}`)).status, 404, 'a different account cannot -- not even a 403');
+    assert.equal((await api(`/api/tournaments/${id}`)).status, 404, 'nor can anyone with no session at all');
   });
 
-  it('mine=true scopes the list to the caller\'s own tournaments; omitted or false returns everything', async () => {
+  it('GET /api/tournaments 401s with no session, and returns only the caller\'s own with one', async () => {
+    const anonymous = await api('/api/tournaments');
+    assert.equal(anonymous.status, 401);
+
     const userA = await signUpAndLogIn();
     const userB = await signUpAndLogIn();
 
     const aGame = (await userA.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "A's game" }) })).body;
     const bGame = (await userB.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "B's game" }) })).body;
 
-    const mineForA = await userA.agent('/api/tournaments?mine=true');
-    assert.equal(mineForA.status, 200);
-    assert.ok(mineForA.body.items.some(t => t.id === aGame.id), "A's own tournament is in A's mine=true list");
-    assert.ok(!mineForA.body.items.some(t => t.id === bGame.id), "B's tournament is not in A's mine=true list");
+    const listForA = await userA.agent('/api/tournaments');
+    assert.equal(listForA.status, 200);
+    assert.ok(listForA.body.items.some(t => t.id === aGame.id), "A's own tournament is in A's list");
+    assert.ok(!listForA.body.items.some(t => t.id === bGame.id), "B's tournament is not in A's list, even though A is logged in");
+  });
 
-    const unfilteredForA = await userA.agent('/api/tournaments');
-    assert.ok(unfilteredForA.body.items.some(t => t.id === aGame.id), 'unfiltered still includes the caller\'s own');
-    assert.ok(unfilteredForA.body.items.some(t => t.id === bGame.id), 'and everyone else\'s, owned or not');
+  it('lists tournaments newest first with summary fields', async () => {
+    const { agent } = await signUpAndLogIn();
+    await agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Friday night' }) });
 
-    // No session at all: `mine=true` has no `userId` to scope to, so it is a
-    // no-op rather than an error or an empty page.
-    const anonymousMine = await api('/api/tournaments?mine=true');
-    assert.equal(anonymousMine.status, 200);
-    assert.ok(anonymousMine.body.items.some(t => t.id === aGame.id));
-    assert.ok(anonymousMine.body.items.some(t => t.id === bGame.id));
+    const { body } = await agent('/api/tournaments');
+    assert.ok(body.total >= 1);
+    assert.ok('playerCount' in body.items[0]);
+    assert.ok(!('players' in body.items[0]), 'the list view should be a lightweight summary');
+  });
+
+  it('summarises which level a tournament is on, not just that it is active', async () => {
+    // A list row saying "active" answers nothing useful -- the question is
+    // always what level and what blinds, so the summary carries the level.
+    const { agent } = await signUpAndLogIn();
+    await agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Level summary test' }) });
+
+    const { body } = await agent('/api/tournaments');
+    const summary = body.items[0];
+
+    assert.ok(summary.currentLevel, 'the summary carries the current level');
+    assert.equal(typeof summary.currentLevel.level, 'number');
+    assert.equal(typeof summary.currentLevel.smallBlind, 'number');
+    assert.equal(typeof summary.currentLevel.bigBlind, 'number');
+    assert.ok(['running', 'paused'].includes(summary.clockStatus));
+    assert.ok(!('structure' in summary), 'but not the whole blind structure');
+  });
+
+  describe('POST /api/tournaments/:id/save', () => {
+    it('401s with no session', async () => {
+      const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Save me' }) });
+      const { status } = await api(`/api/tournaments/${created.body.id}/save`, { method: 'POST' });
+      assert.equal(status, 401);
+    });
+
+    it('404s for someone else\'s already-owned tournament', async () => {
+      const owner = await signUpAndLogIn();
+      const stranger = await signUpAndLogIn();
+
+      const created = await owner.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: "Owner's game" }) });
+      const { status } = await stranger.agent(`/api/tournaments/${created.body.id}/save`, { method: 'POST' });
+      assert.equal(status, 404, 'a stranger asking to save someone else\'s tournament learns nothing, same as a read would');
+    });
+
+    it('422s when the owner tries to save their own tournament again', async () => {
+      const owner = await signUpAndLogIn();
+      const created = await owner.agent('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Already mine' }) });
+
+      const { status, body } = await owner.agent(`/api/tournaments/${created.body.id}/save`, { method: 'POST' });
+      assert.equal(status, 422);
+      assert.equal(body.error.message, 'This tournament has already been saved.');
+    });
+
+    it('claims an unowned tournament, after which it appears in the owner\'s list and cannot be saved again', async () => {
+      const created = await api('/api/tournaments', { method: 'POST', body: JSON.stringify({ name: 'Up for grabs' }) });
+      const id = created.body.id;
+      assert.equal(created.body.userId, null, 'starts unowned');
+
+      const { agent, user } = await signUpAndLogIn();
+      const saved = await agent(`/api/tournaments/${id}/save`, { method: 'POST' });
+      assert.equal(saved.status, 200);
+      assert.equal(saved.body.userId, user.id);
+
+      const list = await agent('/api/tournaments');
+      assert.ok(list.body.items.some(t => t.id === id), 'now shows up in the new owner\'s list');
+
+      const secondAttempt = await agent(`/api/tournaments/${id}/save`, { method: 'POST' });
+      assert.equal(secondAttempt.status, 422, 'no longer saveable, even by the same owner');
+
+      // And it's private now, the same as any other owned tournament.
+      assert.equal((await api(`/api/tournaments/${id}`)).status, 404, 'no longer readable anonymously once saved');
+    });
   });
 });
 

@@ -58,22 +58,54 @@ export class TournamentService {
   }
 
   /**
-   * @param {{limit?: number, offset?: number, mine?: boolean}} query
+   * There is no more "browse everyone's" mode -- the list is unconditionally
+   * the caller's own saved tournaments.
+   * @param {{limit?: number, offset?: number}} query
    * @param {string|undefined} userId
    * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
    */
-  async list({ limit, offset, mine } = {}, userId) {
-    // `mine` with no session is a no-op filter, not an error -- there is
-    // nothing to scope to, so the request just gets the same unfiltered page
-    // anyone else would.
-    const where = mine && userId ? { userId } : undefined;
-    const page = await this.repository.list({ limit, offset, where });
+  async list({ limit, offset } = {}, userId) {
+    // The route requires a session before this ever runs, but this service
+    // doesn't fully trust the route layer to have gotten that right --
+    // listing with no `userId` would silently produce a `where: {userId:
+    // undefined}` filter, and it's better to fail loudly here than to guess
+    // what that should mean.
+    if (!userId) throw ApiError.unauthorized('Log in to see your tournaments.');
+    const page = await this.repository.list({ limit, offset, where: { userId } });
     return { ...page, items: page.items.map(tournament => this.#summarize(tournament)) };
   }
 
-  /** @param {string} id @returns {Promise<object>} */
-  async get(id) {
-    return this.#decorate(await this.#require(id));
+  /**
+   * @param {string} id
+   * @param {string|undefined} userId
+   * @returns {Promise<object>}
+   */
+  async get(id, userId) {
+    const tournament = await this.#require(id);
+    this.#assertAccessible(tournament, userId);
+    return this.#decorate(tournament);
+  }
+
+  /**
+   * Claim an unowned tournament permanently for the caller -- the one-way
+   * move from "open to anyone" to "private, like a hand." There is no
+   * corresponding "unsave"; once a tournament has an owner, it keeps it.
+   * @param {string} id
+   * @param {string} userId
+   * @returns {Promise<object>}
+   */
+  async save(id, userId) {
+    const tournament = await this.#require(id);
+    // Reused rather than duplicated: a stranger asking to save someone
+    // else's tournament shouldn't learn it exists any more than a stranger
+    // reading it should, so this is the exact same 404 `get()` throws.
+    this.#assertAccessible(tournament, userId);
+
+    if (tournament.userId === userId) {
+      throw ApiError.unprocessable('This tournament has already been saved.');
+    }
+
+    return this.#decorate(await this.repository.claim(id, userId));
   }
 
   /**
@@ -84,7 +116,7 @@ export class TournamentService {
    */
   async updateSettings(id, payload, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
 
     // Full settings (name, stacks, blinds, an early payout guess) are only safe
     // to change before the tournament starts. The payout split is the one
@@ -118,7 +150,7 @@ export class TournamentService {
    */
   async remove(id, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
     return this.repository.remove(id);
   }
 
@@ -130,7 +162,7 @@ export class TournamentService {
    */
   async registerPlayer(id, payload, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
     if (!tournament.registrationOpen) {
       throw ApiError.unprocessable('Registration is closed for this tournament.');
     }
@@ -152,7 +184,7 @@ export class TournamentService {
    */
   async updateRegistration(id, { action } = {}, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
 
     if (!REGISTRATION_ACTIONS.includes(action)) {
       throw ApiError.badRequest(`Unknown registration action: ${JSON.stringify(action)}`, [
@@ -183,7 +215,7 @@ export class TournamentService {
    */
   async removePlayer(id, playerId, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
     if (tournament.status !== 'setup') {
       throw ApiError.unprocessable('A player can only be removed before the tournament starts; eliminate them instead.');
     }
@@ -201,7 +233,7 @@ export class TournamentService {
    */
   async updatePlayer(id, playerId, { action } = {}, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
     const player = this.#requirePlayer(tournament, playerId);
 
     if (!PLAYER_ACTIONS.includes(action)) {
@@ -234,7 +266,7 @@ export class TournamentService {
    */
   async updateClock(id, { action, levelIndex } = {}, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
 
     if (!CLOCK_ACTIONS.includes(action)) {
       throw ApiError.badRequest(`Unknown clock action: ${JSON.stringify(action)}`, [
@@ -273,7 +305,7 @@ export class TournamentService {
    */
   async reset(id, userId) {
     const tournament = await this.#require(id);
-    this.#assertMutable(tournament, userId);
+    this.#assertAccessible(tournament, userId);
     return this.#decorate(await this.repository.resetProgress(id));
   }
 
@@ -289,9 +321,13 @@ export class TournamentService {
 
   /**
    * A tournament with no owner is open to anyone, matching the app's
-   * behavior before accounts existed. One with an owner can only be touched
-   * by that owner -- checked here, once, rather than in each mutating
-   * method separately.
+   * behavior before accounts existed. One with an owner can only be seen or
+   * touched by that owner -- on every verb, including a plain read, since
+   * confirming an owned tournament's existence to someone who can't touch it
+   * is its own leak (the same reasoning a hand's ownership check follows).
+   * Checked here, once, rather than in each accessing method separately --
+   * `get()` calls this now too, not just the mutating methods that gave this
+   * method its original name.
    *
    * This is a read-then-check, not an atomic SQL condition the way hands
    * enforce ownership (`WHERE id = $1 AND user_id = $2` in one statement).
@@ -304,7 +340,7 @@ export class TournamentService {
    * @param {string|undefined} userId
    * @throws {ApiError} 404 if the tournament has an owner and it isn't this caller
    */
-  #assertMutable(tournament, userId) {
+  #assertAccessible(tournament, userId) {
     if (tournament.userId && tournament.userId !== userId) {
       throw ApiError.notFound('Tournament not found');
     }

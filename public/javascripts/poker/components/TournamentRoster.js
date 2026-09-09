@@ -16,11 +16,13 @@ const e = React.createElement;
  * @param {object[]} props.players
  * @param {'setup'|'active'|'completed'} props.status
  * @param {boolean} props.registrationOpen whether new players can still register
+ * @param {boolean} props.canEdit whether the caller may register or act on
+ *   players -- an owned tournament's roster is for its owner alone
  * @param {(name: string) => void} props.onRegister
  * @param {(playerId: string, action: 'rebuy'|'addon'|'eliminate'|'reinstate') => void} props.onPlayerAction
  * @param {(playerId: string) => void} props.onRemove
  */
-export function TournamentRoster({ players, status, registrationOpen, onRegister, onPlayerAction, onRemove }) {
+export function TournamentRoster({ players, status, registrationOpen, canEdit, onRegister, onPlayerAction, onRemove }) {
   const [name, setName] = React.useState('');
 
   function submitRegistration(event) {
@@ -42,20 +44,22 @@ export function TournamentRoster({ players, status, registrationOpen, onRegister
   return e(
     'div',
     { className: 'tournament-roster' },
-    registrationOpen
-      ? e(
-          'form',
-          { className: 'tournament-register-form', onSubmit: submitRegistration },
-          e('input', {
-            type: 'text',
-            placeholder: 'Player name',
-            value: name,
-            onChange: event => setName(event.target.value),
-            maxLength: 80
-          }),
-          e('button', { type: 'submit' }, 'Register')
-        )
-      : e('p', { className: 'footnote' }, 'Registration is closed -- no new players can be added.'),
+    !registrationOpen
+      ? e('p', { className: 'footnote' }, 'Registration is closed -- no new players can be added.')
+      : canEdit
+        ? e(
+            'form',
+            { className: 'tournament-register-form', onSubmit: submitRegistration },
+            e('input', {
+              type: 'text',
+              placeholder: 'Player name',
+              value: name,
+              onChange: event => setName(event.target.value),
+              maxLength: 80
+            }),
+            e('button', { type: 'submit' }, 'Register')
+          )
+        : null,
     players.length === 0
       ? e('p', { className: 'footnote' }, 'No players registered yet.')
       : e(
@@ -76,43 +80,45 @@ export function TournamentRoster({ players, status, registrationOpen, onRegister
                 { className: 'tournament-player-meta footnote' },
                 `${player.rebuys} rebuy${player.rebuys === 1 ? '' : 's'}, ${player.addOns} add-on${player.addOns === 1 ? '' : 's'}`
               ),
-              e(
-                'div',
-                { className: 'tournament-player-actions' },
-                !player.eliminated
-                  ? e(
-                      React.Fragment,
-                      null,
-                      e('button', {
-                        type: 'button',
-                        className: 'ghost-button',
-                        onClick: () => onPlayerAction(player.id, 'rebuy')
-                      }, '+ Rebuy'),
-                      e('button', {
-                        type: 'button',
-                        className: 'ghost-button',
-                        onClick: () => onPlayerAction(player.id, 'addon')
-                      }, '+ Add-on'),
-                      e('button', {
-                        type: 'button',
-                        className: 'ghost-button danger',
-                        onClick: () => onPlayerAction(player.id, 'eliminate')
-                      }, 'Eliminate')
-                    )
-                  : e('button', {
-                      type: 'button',
-                      className: 'ghost-button',
-                      onClick: () => onPlayerAction(player.id, 'reinstate')
-                    }, 'Reinstate'),
-                status === 'setup'
-                  ? e('button', {
-                      type: 'button',
-                      className: 'ghost-button danger',
-                      onClick: () => onRemove(player.id),
-                      'aria-label': `Remove ${player.name}`
-                    }, '×')
-                  : null
-              )
+              canEdit
+                ? e(
+                    'div',
+                    { className: 'tournament-player-actions' },
+                    !player.eliminated
+                      ? e(
+                          React.Fragment,
+                          null,
+                          e('button', {
+                            type: 'button',
+                            className: 'ghost-button',
+                            onClick: () => onPlayerAction(player.id, 'rebuy')
+                          }, '+ Rebuy'),
+                          e('button', {
+                            type: 'button',
+                            className: 'ghost-button',
+                            onClick: () => onPlayerAction(player.id, 'addon')
+                          }, '+ Add-on'),
+                          e('button', {
+                            type: 'button',
+                            className: 'ghost-button danger',
+                            onClick: () => onPlayerAction(player.id, 'eliminate')
+                          }, 'Eliminate')
+                        )
+                      : e('button', {
+                          type: 'button',
+                          className: 'ghost-button',
+                          onClick: () => onPlayerAction(player.id, 'reinstate')
+                        }, 'Reinstate'),
+                    status === 'setup'
+                      ? e('button', {
+                          type: 'button',
+                          className: 'ghost-button danger',
+                          onClick: () => onRemove(player.id),
+                          'aria-label': `Remove ${player.name}`
+                        }, '×')
+                      : null
+                  )
+                : null
             )
           )
         )

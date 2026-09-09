@@ -105,6 +105,20 @@ export class TournamentRepository {
   }
 
   /**
+   * Permanently attach an owner to a previously unowned tournament. Whether
+   * the caller is allowed to do that (not already someone else's, not
+   * already the caller's own) is the service's call, made before this ever
+   * runs -- this is just the write, the same lighter read-then-write model
+   * every other ownership-adjacent change here already uses.
+   * @param {string} id
+   * @param {string} userId
+   * @returns {Promise<object|null>}
+   */
+  async claim(id, userId) {
+    return this.store.update(id, () => ({ userId }));
+  }
+
+  /**
    * @param {string} id
    * @param {string} name
    * @returns {Promise<object|null>}
