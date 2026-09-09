@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { bigBlindSeat, derivePositions, smallBlindSeat } from '../../../src/shared/handLog/positions.js';
+import { actingOrder, bigBlindSeat, derivePositions, smallBlindSeat } from '../../../src/shared/handLog/positions.js';
 
 describe('derivePositions', () => {
   it('puts the button on the button seat and the blinds to its left', () => {
@@ -54,5 +54,30 @@ describe('smallBlindSeat / bigBlindSeat', () => {
     const positions = derivePositions(9, 3);
     assert.equal(smallBlindSeat(positions), 4);
     assert.equal(bigBlindSeat(positions), 5);
+  });
+});
+
+describe('actingOrder', () => {
+  it('opens preflop three seats after the button at a full table', () => {
+    // Button, small blind and big blind have all posted/are dealt past --
+    // action starts at the next seat, UTG.
+    assert.deepEqual(actingOrder(6, 0, 'preflop'), [3, 4, 5, 0, 1, 2]);
+  });
+
+  it('opens every street after preflop with the seat after the button', () => {
+    assert.deepEqual(actingOrder(6, 0, 'flop'), [1, 2, 3, 4, 5, 0]);
+  });
+
+  it('rotates with the button, wrapping around the table', () => {
+    assert.deepEqual(actingOrder(6, 4, 'preflop'), [1, 2, 3, 4, 5, 0]);
+  });
+
+  it('inverts heads-up: the button leads preflop and trails every street after it', () => {
+    // The button is the small blind heads-up, so it acts first preflop --
+    // and, per the postflop rule of "seat after the button leads", last
+    // everywhere else, since it's the only seat before itself on a 2-seat
+    // table.
+    assert.deepEqual(actingOrder(2, 0, 'preflop'), [0, 1]);
+    assert.deepEqual(actingOrder(2, 0, 'flop'), [1, 0]);
   });
 });

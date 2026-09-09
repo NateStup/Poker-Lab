@@ -425,9 +425,13 @@ describe('nextToAct', () => {
     assert.equal(nextToAct(hand, 'preflop', 2), 5, 'which folds, so on round to the next');
   });
 
-  it('skips a seat that has already folded when the action comes back round', () => {
-    // Everyone has acted once, so the next seat in order is the first one --
-    // UTG -- which folded. The suggestion has to step over it to seat 4.
+  it('closes the round once the last live seat has called and matched, with no raise this street', () => {
+    // UTG folds; HJ calls the big blind (2); CO, BTN and SB fold; BB checks,
+    // matching. HJ and BB are the only live seats, and both have acted since
+    // the street began (there was never a bet or raise to reopen it) -- the
+    // round is closed. This is the same underlying closure question as the
+    // raised case, in a no-raise shape: matching the number isn't what closes
+    // the action, having acted since the last aggression is.
     const hand = buildHand({
       streets: {
         preflop: {
@@ -448,8 +452,147 @@ describe('nextToAct', () => {
       }
     });
 
-    assert.equal(nextToAct(hand, 'preflop'), 4, 'seat 3 folded, so the wrap lands on seat 4');
-    assert.equal(nextToAct(hand, 'flop', 0), 2, 'and the flop opens on the first live seat after the button');
+    assert.equal(nextToAct(hand, 'preflop'), null, 'both remaining live seats matched and have acted -- the round is closed');
+    assert.equal(nextToAct(hand, 'flop', 0), 2, 'a new street reopens action -- it starts fresh on the first live seat after the button');
+  });
+
+  it('closes the round once folds narrow the field to two matched live seats after a raise', () => {
+    // UTG, HJ and CO fold; BTN opens to 6; SB folds; BB calls 6. This is the
+    // original bug report's exact shape: BTN and BB are the only live seats
+    // left, and both have acted since BTN's raise.
+    const hand = buildHand({
+      streets: {
+        preflop: {
+          board: [],
+          actions: [
+            { seatNumber: 3, type: 'fold', amount: 0 },
+            { seatNumber: 4, type: 'fold', amount: 0 },
+            { seatNumber: 5, type: 'fold', amount: 0 },
+            { seatNumber: 0, type: 'raise', amount: 6 },
+            { seatNumber: 1, type: 'fold', amount: 0 },
+            { seatNumber: 2, type: 'call', amount: 6 }
+          ],
+          notes: ''
+        },
+        flop: { board: [], actions: [], notes: '' },
+        turn: { board: [], actions: [], notes: '' },
+        river: { board: [], actions: [], notes: '' }
+      }
+    });
+
+    assert.equal(nextToAct(hand, 'preflop'), null, 'both remaining seats matched the raise -- the round is closed');
+  });
+
+  it('still owes the big blind a turn when everyone limps to it, even though committed already equals the highest bet', () => {
+    // UTG, HJ, CO, BTN and SB all limp in for 2, matching the big blind's own
+    // forced bet -- but the big blind itself hasn't voluntarily acted yet.
+    // Matching the number by default from posting it is not the same as
+    // having had a turn.
+    const hand = buildHand({
+      streets: {
+        preflop: {
+          board: [],
+          actions: [
+            { seatNumber: 3, type: 'call', amount: 2 },
+            { seatNumber: 4, type: 'call', amount: 2 },
+            { seatNumber: 5, type: 'call', amount: 2 },
+            { seatNumber: 0, type: 'call', amount: 2 },
+            { seatNumber: 1, type: 'call', amount: 2 }
+          ],
+          notes: ''
+        },
+        flop: { board: [], actions: [], notes: '' },
+        turn: { board: [], actions: [], notes: '' },
+        river: { board: [], actions: [], notes: '' }
+      }
+    });
+
+    assert.equal(nextToAct(hand, 'preflop'), 2, 'the big blind still gets its option');
+  });
+
+  it('reopens action for every seat that acted before the last raise, not just whoever is next in line', () => {
+    // Three-handed flop: SB bets, BB calls, BTN raises. SB and BB both acted
+    // before BTN's raise, so both are owed a turn again -- the suggestion
+    // must land back on SB (the first of them in acting order), not fall
+    // through to whichever seat is positionally "next" after BTN.
+    const seats = createEmptyHand({ seatCount: 3 }).seats;
+    const hand = buildHand({
+      seats,
+      buttonSeat: 0,
+      streets: {
+        preflop: { board: [], actions: [], notes: '' },
+        flop: {
+          board: ['2c', '7d', 'Jh'],
+          actions: [
+            { seatNumber: 1, type: 'bet', amount: 10 },
+            { seatNumber: 2, type: 'call', amount: 10 },
+            { seatNumber: 0, type: 'raise', amount: 30 }
+          ],
+          notes: ''
+        },
+        turn: { board: [], actions: [], notes: '' },
+        river: { board: [], actions: [], notes: '' }
+      }
+    });
+
+    assert.equal(nextToAct(hand, 'flop'), 1, 'SB acted before the raise, so it is owed another turn');
+  });
+
+  it('does not close a street of only checks until the last live seat has checked', () => {
+    const hand = buildHand({
+      streets: {
+        preflop: { board: [], actions: [], notes: '' },
+        flop: {
+          board: ['2c', '7d', 'Jh'],
+          actions: [
+            { seatNumber: 1, type: 'check', amount: 0 },
+            { seatNumber: 2, type: 'check', amount: 0 },
+            { seatNumber: 3, type: 'check', amount: 0 },
+            { seatNumber: 4, type: 'check', amount: 0 },
+            { seatNumber: 5, type: 'check', amount: 0 },
+            { seatNumber: 0, type: 'check', amount: 0 }
+          ],
+          notes: ''
+        },
+        turn: { board: [], actions: [], notes: '' },
+        river: { board: [], actions: [], notes: '' }
+      }
+    });
+
+    assert.equal(nextToAct(hand, 'flop', 5), 0, 'the button has not checked yet -- still owed a turn');
+    assert.equal(nextToAct(hand, 'flop', 6), null, 'every live seat has now checked -- the round is closed');
+  });
+
+  it('excludes an all-in seat even when the wraparound would otherwise land on it', () => {
+    // BTN shoves all in for 50; SB, covering, calls; BB folds. BTN is out of
+    // chips and excluded regardless of turn order; SB has already acted
+    // since BTN's raise. Nobody is left to act -- and in particular the
+    // all-in button must not be offered just because it's next in the
+    // rotation.
+    const seats = createEmptyHand({ seatCount: 3 }).seats.map((seat, index) => ({
+      ...seat,
+      stack: index === 0 ? 50 : 200
+    }));
+    const hand = buildHand({
+      seats,
+      buttonSeat: 0,
+      streets: {
+        preflop: {
+          board: [],
+          actions: [
+            { seatNumber: 0, type: 'raise', amount: 50 },
+            { seatNumber: 1, type: 'call', amount: 50 },
+            { seatNumber: 2, type: 'fold', amount: 0 }
+          ],
+          notes: ''
+        },
+        flop: { board: [], actions: [], notes: '' },
+        turn: { board: [], actions: [], notes: '' },
+        river: { board: [], actions: [], notes: '' }
+      }
+    });
+
+    assert.equal(nextToAct(hand, 'preflop'), null, 'the all-in button and the folded blind are both excluded');
   });
 
   it('has nobody to offer once everyone is all in', () => {
