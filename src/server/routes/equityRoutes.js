@@ -4,6 +4,10 @@
  * Routes are built by a factory that takes its dependencies as arguments. That
  * keeps them free of module-level singletons, so a test can mount a router
  * backed by a stub service without any global setup.
+ *
+ * `optionalAuth` runs over the whole router purely so `req.userId` is
+ * available to stamp a calculation's owner -- it never requires a session,
+ * and a logged-out calculation works exactly as it always has.
  */
 
 import { Router } from 'express';
@@ -11,11 +15,16 @@ import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 /**
- * @param {{equityService: import('../services/EquityService.js').EquityService}} deps
+ * @param {{
+ *   equityService: import('../services/EquityService.js').EquityService,
+ *   optionalAuth: import('express').RequestHandler
+ * }} deps
  * @returns {import('express').Router}
  */
-export function createEquityRouter({ equityService }) {
+export function createEquityRouter({ equityService, optionalAuth }) {
   const router = Router();
+
+  router.use(optionalAuth);
 
   /**
    * POST /api/equity
@@ -32,7 +41,7 @@ export function createEquityRouter({ equityService }) {
    * remaining runouts were enumerated exhaustively), and the history record id.
    */
   router.post('/', asyncHandler(async (req, res) => {
-    const result = await equityService.calculate(req.body || {});
+    const result = await equityService.calculate(req.body || {}, req.userId);
     res.json(result);
   }));
 

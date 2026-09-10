@@ -5,9 +5,18 @@
  * trip from browser to API to disk and back. The same records will feed the
  * session tracker, so the row shape here is intentionally close to what the
  * store holds rather than a UI-only projection.
+ *
+ * History is owner-scoped now, with no unscoped fallback -- a logged-out
+ * visitor gets no fetch attempt at all (see `useHistory.js`), so this panel
+ * replaces its usual content with a short message and a login link rather
+ * than rendering an empty list. Kept inline rather than sharing a component
+ * with `TournamentListView`'s own logged-out footnote: it's one paragraph and
+ * a link, and the two render in different contexts (a footnote beside a list
+ * that still shows something, versus this panel's only content).
  */
 
 import { CardList } from './CardBadge.js';
+import { Link } from '../router.js';
 
 const e = React.createElement;
 
@@ -26,11 +35,26 @@ function formatTimestamp(iso) {
  * @param {number} props.total
  * @param {boolean} props.isLoading
  * @param {string|null} props.error
+ * @param {boolean} props.isAuthenticated
  * @param {(record: object) => void} props.onReplay load a record back into the form
  * @param {(id: string) => void} props.onDelete
  * @param {() => void} props.onClear
  */
-export function HistoryPanel({ records, total, isLoading, error, onReplay, onDelete, onClear }) {
+export function HistoryPanel({ records, total, isLoading, error, isAuthenticated, onReplay, onDelete, onClear }) {
+  if (!isAuthenticated) {
+    return e(
+      'section',
+      { className: 'history-panel' },
+      e('h3', null, 'Recent calculations'),
+      e(
+        'p',
+        { className: 'footnote' },
+        "Log in to see your recent calculations. ",
+        e(Link, { to: '/login' }, 'Log in')
+      )
+    );
+  }
+
   return e(
     'section',
     { className: 'history-panel' },

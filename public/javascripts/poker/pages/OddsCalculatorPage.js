@@ -332,6 +332,7 @@ export function OddsCalculatorPage() {
       total: history.total,
       isLoading: history.isLoading,
       error: history.error,
+      isAuthenticated: history.isAuthenticated,
       onReplay: replayRecord,
       onDelete: history.remove,
       onClear: history.clear

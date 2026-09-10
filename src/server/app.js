@@ -21,6 +21,7 @@ import { createApiRouter } from './routes/index.js';
 import { AuthService } from './services/AuthService.js';
 import { EquityService } from './services/EquityService.js';
 import { HandLogService } from './services/HandLogService.js';
+import { HistoryService } from './services/HistoryService.js';
 import { RangeService } from './services/RangeService.js';
 import { TournamentService } from './services/TournamentService.js';
 import {
@@ -53,6 +54,7 @@ export async function createApp({ historyRepository, tournamentRepository, handL
   const rangeService = new RangeService();
   const tournamentService = new TournamentService({ tournamentRepository: tournamentRepo });
   const handLogService = new HandLogService({ handLogRepository: handLogRepo });
+  const historyService = new HistoryService({ historyRepository: repository });
 
   // Accounts are Postgres-only and need no async setup, so these are built
   // here rather than injected: there is no temp-directory equivalent for a
@@ -95,7 +97,7 @@ export async function createApp({ historyRepository, tournamentRepository, handL
     sessionsRepository,
     requireAuth,
     optionalAuth,
-    historyRepository: repository
+    historyService
   }));
 
   // Any non-API path falls through to the single-page app, so client-side

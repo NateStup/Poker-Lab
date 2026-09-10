@@ -33,11 +33,15 @@ export class HistoryRepository {
    * @param {object} params.request the validated request that produced the result
    * @param {object} params.result the engine's output
    * @param {string} [params.label] optional user-supplied name for the spot
+   * @param {string|null} [params.userId] the caller, if one was logged in --
+   *   `null` for an anonymous calculation, exactly like a tournament created
+   *   with no session
    * @returns {Promise<object>} the stored record
    */
-  async recordEquityCalculation({ request, result, label }) {
+  async recordEquityCalculation({ request, result, label, userId = null }) {
     return this.store.insert({
       type: RECORD_TYPES.EQUITY,
+      userId,
       label: label || describeSpot(request.players, result.board),
       request: {
         players: request.players,
@@ -64,14 +68,17 @@ export class HistoryRepository {
 
   /**
    * Read a page of history, newest first.
-   * @param {{limit?: number, offset?: number, type?: string}} [query]
+   * @param {{limit?: number, offset?: number, type?: string, userId?: string}} [query]
+   *   `userId` and `type` combine into one equality `where` -- the same
+   *   mechanism `PostgresStore`/`JsonFileStore` already use for `type` alone.
    * @returns {Promise<{items: object[], total: number, limit: number, offset: number}>}
    */
-  async list({ limit = 20, offset = 0, type } = {}) {
+  async list({ limit = 20, offset = 0, type, userId } = {}) {
+    const where = { ...(type ? { type } : {}), ...(userId ? { userId } : {}) };
     return this.store.list({
       limit,
       offset,
-      where: type ? { type } : undefined
+      where: Object.keys(where).length ? where : undefined
     });
   }
 
@@ -91,17 +98,36 @@ export class HistoryRepository {
     return this.store.remove(id);
   }
 
-  /** @returns {Promise<number>} number of records removed */
-  async clear() {
-    return this.store.clear();
+  /**
+   * Delete only the records owned by `userId`. `DataStore#clear()` has no
+   * bulk-delete-by-filter -- there's no `WHERE` a JSON file can express any
+   * more efficiently than an in-memory filter -- so this reuses the two
+   * primitives the store already exposes (`list` with a `where`, then
+   * `remove` per id) rather than growing the store interface a new method
+   * for one caller.
+   * @param {string} userId
+   * @returns {Promise<number>} how many records were removed
+   */
+  async clearOwnedBy(userId) {
+    const { items } = await this.store.list({ limit: Number.MAX_SAFE_INTEGER, where: { userId } });
+
+    let removed = 0;
+    for (const record of items) {
+      if (await this.store.remove(record.id)) removed += 1;
+    }
+    return removed;
   }
 
   /**
    * Aggregate counts for a dashboard view.
+   * @param {{userId?: string}} [query]
    * @returns {Promise<{total: number, byType: Record<string, number>}>}
    */
-  async stats() {
-    const { items, total } = await this.store.list({ limit: Number.MAX_SAFE_INTEGER });
+  async stats({ userId } = {}) {
+    const { items, total } = await this.store.list({
+      limit: Number.MAX_SAFE_INTEGER,
+      where: userId ? { userId } : undefined
+    });
     const byType = {};
 
     for (const record of items) {
