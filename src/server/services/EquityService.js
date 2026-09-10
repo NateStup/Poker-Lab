@@ -23,13 +23,16 @@ export class EquityService {
    * Validate a request, run the engine, and record the outcome.
    *
    * @param {object} payload raw request body
+   * @param {string|undefined} userId stamped as the record's owner if
+   *   present, exactly like a tournament created while logged in -- an
+   *   anonymous calculation stores `userId: null` and stays that way forever
    * @param {object} [options]
    * @param {boolean} [options.persist=true] set false to calculate without
    *   writing history (used by the upcoming simulator's inner loop)
    * @returns {Promise<object>} the engine result plus the history record id
    * @throws {ApiError} 400 when the payload fails validation
    */
-  async calculate(payload, { persist = true } = {}) {
+  async calculate(payload, userId, { persist = true } = {}) {
     const { valid, errors, value } = validateEquityRequest(payload);
 
     if (!valid) {
@@ -46,7 +49,8 @@ export class EquityService {
         const record = await this.historyRepository.recordEquityCalculation({
           request: value,
           result,
-          label: typeof payload.label === 'string' ? payload.label.slice(0, 120) : undefined
+          label: typeof payload.label === 'string' ? payload.label.slice(0, 120) : undefined,
+          userId: userId || null
         });
         historyId = record.id;
       } catch (error) {

@@ -35,6 +35,9 @@ import { TournamentRepository } from '../../src/server/store/TournamentRepositor
 let server;
 let baseUrl;
 let tempDir;
+/** Kept so a test can reach a repository directly rather than through an
+ *  endpoint that now requires a session it doesn't want to set up. */
+let app;
 /** Accounts the hand-log tests create, torn down by that block's `after`. */
 const createdUserIds = [];
 /** Row counts before the hand-log block ran, so its teardown is checked
@@ -153,7 +156,7 @@ before(async () => {
   const handLogRepository = new HandLogRepository(getPool());
   if (!dbSkip) await handLogRepository.init();
 
-  const app = await createApp({ historyRepository, tournamentRepository, handLogRepository });
+  app = await createApp({ historyRepository, tournamentRepository, handLogRepository });
   server = http.createServer(app);
 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -290,15 +293,18 @@ describe('POST /api/ranges/equity', () => {
   });
 
   it('does not add a history record', async () => {
-    const before = await api('/api/history/stats');
+    // `/api/history/stats` now requires a session (history is owner-scoped),
+    // so this reads the repository directly rather than standing up an
+    // account just to confirm a count didn't change.
+    const before = await app.locals.historyRepository.stats();
 
     await api('/api/ranges/equity', {
       method: 'POST',
       body: JSON.stringify({ heroRange: ['AA'], villain: { cards: ['Kd', 'Kc'] }, iterations: 500 })
     });
 
-    const after = await api('/api/history/stats');
-    assert.equal(after.body.total, before.body.total);
+    const after = await app.locals.historyRepository.stats();
+    assert.equal(after.total, before.total);
   });
 
   it('rejects a missing hero range', async () => {
@@ -337,34 +343,40 @@ describe('POST /api/ranges/equity', () => {
   });
 });
 
+// History is owner-scoped like a tournament: listing, stats, and clearing all
+// require a session unconditionally (there's no unowned "everyone's history"
+// mode left, unlike tournaments), so those live in the '/api/history
+// ownership' block below, which needs real accounts. What's left here needs
+// no session at all -- an unowned record (every calculation this file has
+// made anonymously above) stays open to anyone, on both the read and the
+// delete, exactly as it always has been.
 describe('/api/history', () => {
-  it('returns the records created by earlier calculations', async () => {
+  it('requires a session to list', async () => {
     const { status, body } = await api('/api/history');
-
-    assert.equal(status, 200);
-    assert.ok(body.total >= 3);
-    assert.ok(body.items[0].createdAt);
-    assert.equal(body.items[0].type, 'equity');
+    assert.equal(status, 401);
+    assert.equal(body.error.code, 'UNAUTHORIZED');
   });
 
-  it('caps the page size', async () => {
-    const { body } = await api('/api/history?limit=1');
-    assert.equal(body.items.length, 1);
-    assert.equal(body.limit, 1);
+  it('requires a session for stats', async () => {
+    const { status } = await api('/api/history/stats');
+    assert.equal(status, 401);
   });
 
-  it('reports stats', async () => {
-    const { status, body } = await api('/api/history/stats');
-    assert.equal(status, 200);
-    assert.ok(body.total >= 3);
+  it('requires a session to clear', async () => {
+    const { status } = await api('/api/history', { method: 'DELETE' });
+    assert.equal(status, 401);
   });
 
-  it('fetches a single record by id', async () => {
-    const { body: page } = await api('/api/history?limit=1');
-    const { status, body } = await api(`/api/history/${page.items[0].id}`);
+  it('fetches an unowned record by id, with no session', async () => {
+    const created = await api('/api/equity', {
+      method: 'POST',
+      body: JSON.stringify({ players: [['As', 'Ah'], ['Kd', 'Kc']], iterations: 500 })
+    });
 
+    const { status, body } = await api(`/api/history/${created.body.historyId}`);
     assert.equal(status, 200);
-    assert.equal(body.id, page.items[0].id);
+    assert.equal(body.id, created.body.historyId);
+    assert.equal(body.userId, null);
   });
 
   it('404s for an unknown id', async () => {
@@ -373,19 +385,145 @@ describe('/api/history', () => {
     assert.equal(body.error.code, 'NOT_FOUND');
   });
 
-  it('deletes a record', async () => {
-    const { body: page } = await api('/api/history?limit=1');
-    const { status } = await api(`/api/history/${page.items[0].id}`, { method: 'DELETE' });
+  it('deletes an unowned record, with no session', async () => {
+    const created = await api('/api/equity', {
+      method: 'POST',
+      body: JSON.stringify({ players: [['As', 'Ah'], ['Kd', 'Kc']], iterations: 500 })
+    });
+    const id = created.body.historyId;
 
+    const { status } = await api(`/api/history/${id}`, { method: 'DELETE' });
     assert.equal(status, 204);
-    assert.equal((await api(`/api/history/${page.items[0].id}`)).status, 404);
+    assert.equal((await api(`/api/history/${id}`)).status, 404);
+  });
+});
+
+// Ownership needs real accounts, so -- like `/api/tournaments ownership`
+// below -- this block needs a live database even though history itself is
+// still JSON-file-backed. Self-contained rather than sharing another block's
+// `createdUserIds`/baseline, same reasoning as that block's own comment.
+describe('/api/history ownership', { skip: dbSkip }, () => {
+  /** @type {string[]} */
+  const ownerUserIds = [];
+
+  after(async () => {
+    if (ownerUserIds.length === 0) return;
+    await getPool().query('DELETE FROM users WHERE id = ANY($1::uuid[])', [ownerUserIds]);
   });
 
-  it('clears every record', async () => {
-    const { status, body } = await api('/api/history', { method: 'DELETE' });
+  /**
+   * Sign up a fresh account and return a browser already holding its
+   * session. A new email every time, so tests never collide over the unique
+   * index.
+   * @returns {Promise<{agent: (pathname: string, options?: RequestInit) => Promise<{status: number, body: any}>, user: object}>}
+   */
+  async function signUpAndLogIn() {
+    const agent = browser();
+    const { status, body } = await agent('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: `${randomUUID()}@example.test`,
+        password: 'a-fine-password',
+        displayName: 'History Owner'
+      })
+    });
+
+    assert.equal(status, 201, `signup failed: ${JSON.stringify(body)}`);
+    ownerUserIds.push(body.user.id);
+    return { agent, user: body.user };
+  }
+
+  /**
+   * @param {(pathname: string, options?: RequestInit) => Promise<{status: number, body: any}>} agent
+   * @returns {Promise<string>} the new record's history id
+   */
+  async function calculateAsync(agent) {
+    const { status, body } = await agent('/api/equity', {
+      method: 'POST',
+      body: JSON.stringify({ players: [['As', 'Ah'], ['Kd', 'Kc']], iterations: 500 })
+    });
     assert.equal(status, 200);
-    assert.ok(body.removed > 0);
-    assert.equal((await api('/api/history')).body.total, 0);
+    return body.historyId;
+  }
+
+  it('a brand-new account has no history, even though this file has run anonymous calculations', async () => {
+    const { agent } = await signUpAndLogIn();
+    const { status, body } = await agent('/api/history');
+    assert.equal(status, 200);
+    assert.equal(body.total, 0);
+  });
+
+  it('a calculation made while logged in is scoped to that account afterward', async () => {
+    const { agent, user } = await signUpAndLogIn();
+    const id = await calculateAsync(agent);
+
+    const { body } = await agent('/api/history');
+    assert.equal(body.total, 1);
+    assert.equal(body.items[0].id, id);
+    assert.equal(body.items[0].userId, user.id);
+  });
+
+  it('a second account sees none of the first account\'s history', async () => {
+    const first = await signUpAndLogIn();
+    await calculateAsync(first.agent);
+
+    const second = await signUpAndLogIn();
+    const { body } = await second.agent('/api/history');
+    assert.equal(body.total, 0);
+  });
+
+  it('stats are scoped to the caller too', async () => {
+    const { agent } = await signUpAndLogIn();
+    await calculateAsync(agent);
+
+    const { body } = await agent('/api/history/stats');
+    assert.equal(body.total, 1);
+  });
+
+  it('an owned record is readable and deletable only by its owner -- 404 for a stranger and for no session', async () => {
+    const owner = await signUpAndLogIn();
+    const stranger = await signUpAndLogIn();
+    const id = await calculateAsync(owner.agent);
+
+    const byOwner = await owner.agent(`/api/history/${id}`);
+    assert.equal(byOwner.status, 200);
+
+    const byStranger = await stranger.agent(`/api/history/${id}`);
+    assert.equal(byStranger.status, 404);
+
+    const byNoOne = await api(`/api/history/${id}`);
+    assert.equal(byNoOne.status, 404);
+
+    const deleteByStranger = await stranger.agent(`/api/history/${id}`, { method: 'DELETE' });
+    assert.equal(deleteByStranger.status, 404);
+
+    const deleteByNoOne = await api(`/api/history/${id}`, { method: 'DELETE' });
+    assert.equal(deleteByNoOne.status, 404);
+
+    const deleteByOwner = await owner.agent(`/api/history/${id}`, { method: 'DELETE' });
+    assert.equal(deleteByOwner.status, 204);
+  });
+
+  it('clearing deletes only the caller\'s own records, leaving anonymous and other accounts\' records alone', async () => {
+    const anonymousId = await calculateAsync(api);
+
+    const owner = await signUpAndLogIn();
+    const ownedId = await calculateAsync(owner.agent);
+
+    const other = await signUpAndLogIn();
+    const otherId = await calculateAsync(other.agent);
+
+    const { status, body } = await owner.agent('/api/history', { method: 'DELETE' });
+    assert.equal(status, 200);
+    assert.equal(body.removed, 1);
+
+    assert.equal((await owner.agent('/api/history')).body.total, 0);
+
+    // Survives: an anonymous record and a different account's record.
+    assert.equal((await api(`/api/history/${anonymousId}`)).status, 200);
+    assert.equal((await other.agent(`/api/history/${otherId}`)).status, 200);
+    // The owner's own deleted record is actually gone, not just unlisted.
+    assert.equal((await owner.agent(`/api/history/${ownedId}`)).status, 404);
   });
 });
 
