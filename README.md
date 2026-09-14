@@ -8,6 +8,9 @@ hand action by action. Accounts are real: a saved hand belongs to whoever
 logged it and is reachable by nobody else, unless its owner generates a
 revocable link to share it read-only.
 
+**Live at [pokerlab-ebon.vercel.app](https://pokerlab-ebon.vercel.app)** —
+Vercel for the app, Postgres on Neon.
+
 Built as a portfolio project, so the emphasis is on architecture that holds up
 under reading: a pure domain layer shared verbatim between server and browser,
 dependency-injected services, a data layer that's genuinely relational where
@@ -24,7 +27,7 @@ npm start
 
 ```bash
 npm run dev    # auto-restart on change
-npm test       # 474 tests, no test framework dependency
+npm test       # 496 tests, no test framework dependency
 ```
 
 Requires **Node 20.11 or newer**. No build step — the frontend is served as
@@ -73,8 +76,10 @@ sampling error at all. Beyond that it samples from a seeded PRNG, and the seed
 is stored with the result — which is what makes a saved run reproducible rather
 than merely recorded.
 
-Every calculation is written to a JSON-backed store and shown in a history panel
-that can reload a past spot back into the form. Whenever the board is a flop
+Every calculation is written to a history panel that can reload a past spot
+back into the form — scoped to whoever's logged in, or not listed anywhere
+at all if nobody is. Running a calculation never requires an account; only
+an account's own history is ever shown to it. Whenever the board is a flop
 or turn (heads-up only), the result also breaks down each player's **outs** —
 the exact unseen cards that make them the winner or a chop on the very next
 card, computed by enumeration rather than sampled.
@@ -103,9 +108,14 @@ can edit) counts down locally in the browser between server syncs, chimes on
 every level change, and pauses/resumes/advances on command. A payout panel
 computes amounts from the prize pool and a percentage split the moment there's
 money in the pool, before anyone's even been eliminated. No account is needed
-to create or run one — logging in is optional, and only changes one thing: a
-tournament created while logged in remembers whose it is, is only editable by
-that account from then on, and can be filtered to "just mine" in the list.
+to create or run one, and creating one while logged in claims it immediately
+— no separate step. Made anonymously, a tournament stays exactly as open as
+before accounts existed: anyone with the link can view or run it, but it's
+never listed anywhere for a stranger to browse into, findable only by the
+browser that made it. A "Save" button lets you claim it later if you log in
+partway through. Claimed either way, a tournament becomes as private as a
+saved hand: reachable and editable only by that account, gated on every verb
+including reads.
 
 **Hand Logger.** Requires an account. Recreate a hand you played on a table
 diagram — seats, stacks, who was on the button — then log the betting street
@@ -346,6 +356,7 @@ GET    /api/tournaments/:id                       full record + derived clock/st
 PATCH  /api/tournaments/:id                       update settings (setup only, see below)
 DELETE /api/tournaments/:id                       delete
 POST   /api/tournaments/:id/reset                 back to setup; roster and settings kept
+POST   /api/tournaments/:id/save                  claim an unowned tournament for the caller, permanently
 PATCH  /api/tournaments/:id/registration          {action: 'close'|'reopen'}
 POST   /api/tournaments/:id/players               register a player
 DELETE /api/tournaments/:id/players/:playerId     remove a registration (setup only)
@@ -361,12 +372,22 @@ payout split against the field's actual final size — a payout-split-only
 `PATCH` is accepted after the start once registration is closed, which is the
 one exception to settings being setup-only.
 
-No login is required for any of the above -- every route here runs under
-`optionalAuth`, not `requireAuth`. A tournament created while logged in
-remembers whose it is and can only be mutated by that account from then on
-(every other write stays open to anyone, exactly as before accounts existed);
-`GET /api/tournaments?mine=true` lists only the caller's own. Reads are never
-gated, regardless of ownership.
+No login is required to create or use a tournament -- every route runs under
+`optionalAuth`, not `requireAuth`, except the two below. `POST
+/api/tournaments` auto-claims the new tournament for the caller if a session
+is present, the same way `POST /api/hands` always does; with no session,
+it's created unowned. An unowned tournament stays exactly as open as before
+accounts existed: anyone can read or mutate it. `POST /api/tournaments/:id/save`
+is the second path to ownership -- claiming an unowned tournament for the
+caller after the fact, permanently, with no unsave. However a tournament
+comes to be owned, it's then gated on every verb, including reads, the same
+rule hands already follow: a tournament that isn't yours reports 404, not a
+different error, whether you're logged in as someone else or not logged in
+at all.
+
+`GET /api/tournaments` requires login and is unconditionally scoped to the
+caller's own saved tournaments -- there's no "everyone's tournaments" view
+and no `mine` flag, since there's no other mode to opt out of.
 
 `GET /api/tournaments/:id` decorates the stored record with `derived`,
 computed fresh on every read from `shared/tournament/`:
@@ -390,6 +411,30 @@ common case. Completion also force-closes registration, so nobody can register
 into an event that has already paid out — `POST /api/tournaments/:id/reset`
 reopens it and returns the tournament to `setup` while keeping the roster and
 settings, which is "run the same event again with the same players".
+
+### History
+
+```
+GET    /api/history            the caller's own records, newest first (`limit`, `offset`, `type`)
+GET    /api/history/stats      aggregate counts, scoped to the caller
+GET    /api/history/:id        a single record
+DELETE /api/history/:id        delete one record
+DELETE /api/history            clear the caller's own records
+```
+
+`POST /api/equity` stamps a result with whoever's logged in, the same
+auto-claim `POST /api/tournaments` uses -- there's no separate save step.
+And unlike tournaments, this is permanent by design, not a gap left for
+later: an anonymous calculation has no path to being claimed after the
+fact. `POST /api/ranges/equity` never persists to history at all,
+regardless of login -- there's no `RECORD_TYPES` entry for a range result.
+
+`GET /api/history` and `/stats` require login and are unconditionally
+scoped -- there's no anonymous "everyone's history" view. A single record
+follows tournaments' accessibility rule exactly: unowned is open to anyone
+with its id, owned is readable and deletable only by its owner, 404 for
+everyone else. `DELETE /api/history` clears only the caller's own records
+-- anonymous and other accounts' records are untouched.
 
 ### Hands
 
@@ -473,11 +518,6 @@ half-dealt street.
 | `POST` | `/api/auth/login` | Start a session |
 | `POST` | `/api/auth/logout` | End the current session |
 | `GET` | `/api/auth/me` | The logged-in user, if any |
-| `GET` | `/api/history` | Records, newest first (`limit`, `offset`, `type`) |
-| `GET` | `/api/history/stats` | Aggregate counts |
-| `GET` | `/api/history/:id` | A single record |
-| `DELETE` | `/api/history/:id` | Delete one record |
-| `DELETE` | `/api/history` | Clear all records |
 
 Errors are consistently shaped, with field-level detail where it exists:
 
@@ -497,11 +537,12 @@ Errors are consistently shaped, with field-level detail where it exists:
 npm test
 ```
 
-474 tests via Node's built-in runner — no Jest, Mocha, or Chai. Five suites
-are Postgres-only (`/api/hands` and its cleanup check, `HandLogRepository`,
-`PostgresStore`, and `PostgresStore` durability) and skip themselves with a
-reason when no database is reachable, so the full suite still passes without
-Docker running -- at 421 instead of 474.
+496 tests via Node's built-in runner — no Jest, Mocha, or Chai. Eight suites
+are Postgres-only (`/api/hands` and its cleanup check, `/api/history
+ownership`, `/api/tournaments ownership` and its cleanup check,
+`HandLogRepository`, `PostgresStore`, and `PostgresStore` durability) and
+skip themselves with a reason when no database is reachable, so the full
+suite still passes without Docker running -- at 430 instead of 496.
 
 Security-critical policy -- ownership scoping, and the identical error for a
 wrong password versus an unknown email -- is also asserted directly against
@@ -517,6 +558,16 @@ them expose a table-name override the way `PostgresStore` does for
 `history`/`tournaments`. Each test creates its own account with a random
 email, touches only its own rows, and a dedicated cleanup suite asserts the
 three tables are back to their pre-suite counts afterward.
+
+The `/api/history ownership` and `/api/tournaments ownership` blocks need a
+live database for the same reason -- testing who owns a record means signing
+up real accounts -- but `history` and `tournaments` records themselves stay
+behind the temp-directory `JsonFileStore` the rest of those two suites use,
+not a real table, so there's nothing there for a cleanup check to count.
+Each block's own `after` hook deletes exactly the `users` rows it created;
+`/api/tournaments ownership` additionally has a dedicated cleanup suite
+asserting `users`/`sessions`/`hands` are back to their pre-suite counts,
+matching `/api/hands`'s own pattern.
 
 The domain tests deliberately favour assertions that are **provable by hand**
 over published percentages: a player holding the nut straight flush on a
@@ -582,8 +633,11 @@ revisited.
 - [x] Accounts — signup/login/logout, signed session cookies, `scrypt` password hashing
 - [x] Hand ownership and revocable sharing — a hand is private by default; a
       share token, not the hand's own id, is what anyone else can see
-- [x] Optional tournament ownership — no login required to use it, but a
-      tournament created while logged in remembers whose it is
+- [x] Tournament save/claim — anonymous by default, private and unlisted
+      once saved, with no unsave
+- [x] Calculation history scoped to accounts — recorded regardless of
+      login, but only ever shown to its owner
+- [x] Deployed — Vercel, Postgres on Neon
 - [ ] **Hand simulator** — deal and play out configurable spots from a seeded deck
 - [ ] **Session tracker** — aggregate stored results into trends over time
 - [ ] Tournament seating/table balancing
@@ -592,8 +646,16 @@ revisited.
 
 ## Notes
 
-The CDN in [public/index.html](public/index.html) now serves React's
-**production** builds. Local prep for deploying to Vercel (with Postgres on
-Neon) is in place — a root `server.js` entry point and a
-`vercel-build` step that copies `src/shared/` into `public/shared/` — but the
-app has not actually been deployed yet.
+Deployed and live at [pokerlab-ebon.vercel.app](https://pokerlab-ebon.vercel.app)
+— Vercel for the app, Neon for Postgres, and the CDN in
+[public/index.html](public/index.html) serving React's production build.
+
+The one genuinely surprising part of getting there: Vercel's zero-config
+Express detection does a literal static check for `import express from
+'express'` in the entry file — confirmed by its own build error, "No
+entrypoint found which imports express," after two technically-correct
+entry points were each silently never built into a function at all. The
+fix was one otherwise-unused import line, kept deliberately in
+[server.js](server.js) with a comment explaining why it's there —
+removing it breaks detection again with no runtime error, only a build
+that quietly stops producing a function.
