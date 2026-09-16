@@ -11,13 +11,15 @@ revocable link to share it read-only.
 **Live at [pokerlab-ebon.vercel.app](https://pokerlab-ebon.vercel.app)** —
 Vercel for the app, Postgres on Neon.
 
-Built as a portfolio project, so the emphasis is on architecture that holds up
-under reading: a pure domain layer shared verbatim between server and browser,
+The emphasis throughout is on architecture that reads clearly on its own: a
+pure domain layer shared verbatim between server and browser,
 dependency-injected services, a data layer that's genuinely relational where
 ownership needs enforcing and a swappable generic store where it doesn't, and
 tests that assert on provable poker facts rather than on coincidence.
 
 ## Quick start
+
+Only needed to run it yourself — the live link above already has it running.
 
 ```bash
 npm install
@@ -79,10 +81,10 @@ than merely recorded.
 Every calculation is written to a history panel that can reload a past spot
 back into the form — scoped to whoever's logged in, or not listed anywhere
 at all if nobody is. Running a calculation never requires an account; only
-an account's own history is ever shown to it. Whenever the board is a flop
-or turn (heads-up only), the result also breaks down each player's **outs** —
-the exact unseen cards that make them the winner or a chop on the very next
-card, computed by enumeration rather than sampled.
+an account's own history is ever shown to it. Heads-up, with the board at 
+the flop or the turn, the result also breaks down each player's **outs** — the 
+exact unseen cards that make them the winner or a chop on the very next card, 
+computed by enumeration rather than sampled.
 
 **Range Explorer.** Paint a hero range on the standard 13x13 grid — by hand,
 or with a "top X%" slider driven by the classic Chen Formula hand ranking —
@@ -94,7 +96,7 @@ each side per iteration and deals the rest of the board, keeping the cost
 roughly constant regardless of range width.
 
 Every individual card position on both pages — a hole card, a board street's
-card, the villain's hand — is a card-back until clicked, at which point a
+card, the villain's hand — is shown face-down until clicked, at which point a
 picker popover opens scoped to just that one position. Ranges can also be
 pasted or copied as standard shorthand (`22+,A5s+,KTo+`) via the range
 notation box under each grid.
@@ -111,11 +113,10 @@ money in the pool, before anyone's even been eliminated. No account is needed
 to create or run one, and creating one while logged in claims it immediately
 — no separate step. Made anonymously, a tournament stays exactly as open as
 before accounts existed: anyone with the link can view or run it, but it's
-never listed anywhere for a stranger to browse into, findable only by the
-browser that made it. A "Save" button lets you claim it later if you log in
-partway through. Claimed either way, a tournament becomes as private as a
-saved hand: reachable and editable only by that account, gated on every verb
-including reads.
+never listed anywhere, findable only by the browser that made it. A "Save"
+button lets you claim it later if you log in partway through. Claimed either
+way, a tournament becomes as private as a saved hand: reachable and editable
+only by that account, gated on every verb including reads.
 
 **Hand Logger.** Requires an account. Recreate a hand you played on a table
 diagram — seats, stacks, who was on the button — then log the betting street
@@ -136,10 +137,12 @@ from memory is far likelier than someone making a claim about the rules.
 Two things are deliberately never typed in. **Forced bets are derived** — antes,
 blinds and straddles come from the table format and the button, so the stored
 action list holds only voluntary decisions. And there is **no winner picker**:
-the hand already records the folds, the board and the holdings, so the result
-is read off it rather than asked for a second time. When the cards genuinely
-don't say — a villain who mucked unseen, a hand cut short — the pot shows as
-unawarded and the page asks for the missing holding instead of guessing.
+the winner is derived, not asked for — comparing hand rankings against what
+got logged (the folds, the final board, the revealed holdings) using the
+same evaluation logic the odds calculator itself uses, not just "whoever
+didn't fold." When the cards genuinely don't say — a villain who mucked
+unseen, a hand cut short — the pot shows as unawarded and the page asks for
+the missing holding instead of guessing.
 
 Amounts are street totals, the way poker is spoken: a big blind calling a raise
 to 300 logs `call 300`, not "put in 200 more", and the pot maths subtracts what
@@ -498,7 +501,7 @@ seats, and exactly one must be marked `isHero`. Action `type` is one of `fold`,
 `check`, `call`, `bet`, `raise`; the last three carry an `amount`.
 
 `action.amount` is **the total that seat has committed on that street once the
-action is done** — "raise to 300", not "put in 300 more". Forced bets are never
+action is done** — "raise to 300". Forced bets are never
 listed: antes, blinds and the straddle are derived from `format` and
 `buttonSeat` on read, so `actions` holds only voluntary decisions. `GET
 /api/hands/:id` decorates the record with `derived`, holding the position
@@ -537,8 +540,8 @@ Errors are consistently shaped, with field-level detail where it exists:
 npm test
 ```
 
-496 tests via Node's built-in runner — no Jest, Mocha, or Chai. Eight suites
-are Postgres-only (`/api/hands` and its cleanup check, `/api/history
+496 tests via Node's built-in runner — no outside testing framework at all.
+Eight suites are Postgres-only (`/api/hands` and its cleanup check, `/api/history
 ownership`, `/api/tournaments ownership` and its cleanup check,
 `HandLogRepository`, `PostgresStore`, and `PostgresStore` durability) and
 skip themselves with a reason when no database is reachable, so the full
@@ -638,11 +641,6 @@ revisited.
 - [x] Calculation history scoped to accounts — recorded regardless of
       login, but only ever shown to its owner
 - [x] Deployed — Vercel, Postgres on Neon
-- [ ] **Hand simulator** — deal and play out configurable spots from a seeded deck
-- [ ] **Session tracker** — aggregate stored results into trends over time
-- [ ] Tournament seating/table balancing
-- [ ] CI pipeline (GitHub Actions) with test runs and build artifacts
-- [ ] Hand-log extras — equity at every decision, replayer autoplay, hand-history import
 
 ## Notes
 
